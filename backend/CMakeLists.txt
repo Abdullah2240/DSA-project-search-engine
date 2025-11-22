@@ -12,6 +12,12 @@ add_executable(build_lexicon
     cpp/src/lexicon.cpp
 )
 
+# Build forward index executable
+add_executable(build_forward_index 
+    cpp/src/build_forward_index.cpp 
+    cpp/src/forward_index.cpp 
+)
+
 # Build Python module (if pybind11 is available)
 find_package(pybind11 QUIET)
 if(pybind11_FOUND)
