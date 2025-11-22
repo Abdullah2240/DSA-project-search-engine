@@ -10,23 +10,24 @@
 
 using json = nlohmann::json;
 
+// Class to handle building the Forward Index from processed data
 class ForwardIndexBuilder {
 public:
     ForwardIndexBuilder();
     
-    // Loads the "frozen" lexicon.json
+    // Loads the frozen lexicon (word -> id mapping)
     bool load_lexicon(const std::string& filepath);
 
-    // Reads dataset, builds index with BOTH list and counts (Hybrid)
+    // Main logic: Reads dataset, calculates TF, positions, and doc length
     void build_index(const std::string& dataset_path);
 
-    // Saves the final JSON output
+    // Saves the resulting JSON to disk (compact format)
     void save_to_file(const std::string& output_path);
 
 private:
-    std::map<std::string, int> lexicon_;
-    json forward_index_json_; 
-    int total_docs_ = 0;
+    std::map<std::string, int> lexicon_; // Stores frozen WordIDs
+    json forward_index_json_;            // Final JSON object
+    int total_docs_ = 0;                 // Document counter
 };
 
 #endif // FORWARD_INDEX_HPP
