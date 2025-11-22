@@ -3,13 +3,14 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <map> 
 
-// --- Helper Tokenizer (Matches the logic in engine.cpp) ---
+// Helper tokenizer, cleans text and splits into tokens
 std::vector<std::string> tokenize(const std::string& text) {
     std::vector<std::string> tokens;
     std::string clean_text;
     
-    // Simple cleaning: replace non-alphanumeric with space
+    // Lowercase and remove non-alphanumeric chars
     for (char c : text) {
         if (std::isalnum(c) || std::isspace(c)) {
             clean_text += std::tolower(c);
@@ -18,48 +19,49 @@ std::vector<std::string> tokenize(const std::string& text) {
         }
     }
 
+    // Split by whitespace
     std::stringstream ss(clean_text);
     std::string word;
     while (ss >> word) {
-        if (word.length() > 0) {
-            tokens.push_back(word);
-        }
+        if (!word.empty()) tokens.push_back(word);
     }
     return tokens;
 }
-// ---------------------------------------------------------
+
+// Struct to hold temporary document stats
+struct WordStats {
+    int frequency = 0;
+    std::vector<int> positions;
+};
 
 ForwardIndexBuilder::ForwardIndexBuilder() {}
 
+// Load the frozen lexicon to ensure consistent WordIDs
 bool ForwardIndexBuilder::load_lexicon(const std::string& filepath) {
     std::cout << "Loading lexicon from: " << filepath << std::endl;
     std::ifstream f(filepath);
     if (!f.is_open()) {
-        std::cerr << "ERROR: Could not open lexicon file at " << filepath << std::endl;
+        std::cerr << "ERROR: Could not open lexicon file." << std::endl;
         return false;
     }
     try {
         json j;
         f >> j;
-        
-        // Handle both formats (direct map or nested under "word_to_index")
+        // Handle both simple and nested JSON formats
         if (j.contains("word_to_index")) {
-            for (auto& element : j["word_to_index"].items()) {
-                lexicon_[element.key()] = element.value();
-            }
+            for (auto& el : j["word_to_index"].items()) lexicon_[el.key()] = el.value();
         } else {
-            for (auto& element : j.items()) {
-                lexicon_[element.key()] = element.value();
-            }
+            for (auto& el : j.items()) lexicon_[el.key()] = el.value();
         }
     } catch (const std::exception& e) {
-        std::cerr << "JSON parsing error: " << e.what() << std::endl;
+        std::cerr << "JSON error: " << e.what() << std::endl;
         return false;
     }
-    std::cout << "Lexicon loaded. Words: " << lexicon_.size() << std::endl;
+    std::cout << "Lexicon loaded. Size: " << lexicon_.size() << std::endl;
     return true;
 }
 
+// Reads dataset line-by-line and builds the index
 void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
     std::cout << "Reading dataset: " << dataset_path << std::endl;
     std::ifstream dataset(dataset_path);
@@ -77,12 +79,10 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
             auto doc_obj = json::parse(line);
             std::vector<std::string> tokens;
 
-            // OPTION A: If dataset is already tokenized (has "tokens" list)
+            // Use pre-tokenized list if available, else tokenize raw text
             if (doc_obj.contains("tokens")) {
                 tokens = doc_obj["tokens"].get<std::vector<std::string>>();
-            } 
-            // OPTION B: Raw text (Title + Abstract)
-            else {
+            } else {
                 std::string text = "";
                 if (doc_obj.contains("title") && !doc_obj["title"].is_null()) 
                     text += doc_obj["title"].get<std::string>() + " ";
@@ -91,31 +91,38 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
                 tokens = tokenize(text);
             }
 
-            // Process Tokens: Filter & Count
-            std::vector<int> doc_word_ids;
-            std::map<std::string, int> tf_counts;
+            // Map automatically sorts keys by WordID (0, 1, 2...)
+            std::map<int, WordStats> doc_stats;
+            int current_pos = 0;
 
+            // Filter tokens against Lexicon and collect stats
             for (const auto& token : tokens) {
-                // Check if word is in the FROZEN LEXICON
                 if (lexicon_.count(token)) {
                     int id = lexicon_[token];
-                    doc_word_ids.push_back(id);
-                    
-                    // Count frequency (TF)
-                    tf_counts[std::to_string(id)]++;
+                    doc_stats[id].frequency++;
+                    doc_stats[id].positions.push_back(current_pos);
                 }
+                current_pos++;
             }
 
-            // Store Hybrid Structure
-            if (!doc_word_ids.empty()) {
-                inner_map[std::to_string(doc_int_id)] = {
-                    {"words", doc_word_ids},    // Keeps Order
-                    {"frequency", tf_counts}    // Keeps Counts
-                };
+            // Only store document if it contains valid words
+            if (!doc_stats.empty()) {
+                json doc_json;
+                doc_json["doc_length"] = tokens.size(); // Critical for BM25
+
+                json words_obj;
+                for (const auto& [id, stats] : doc_stats) {
+                    words_obj[std::to_string(id)] = {
+                        {"frequency", stats.frequency},
+                        {"positions", stats.positions}
+                    };
+                }
+                doc_json["words"] = words_obj;
+                inner_map[std::to_string(doc_int_id)] = doc_json;
             }
             
             doc_int_id++;
-            if (doc_int_id % 5000 == 0) std::cout << "Processed " << doc_int_id << "..." << std::endl;
+            if (doc_int_id % 5000 == 0) std::cout << "Processed " << doc_int_id << " docs..." << std::endl;
 
         } catch (const std::exception& e) { continue; }
     }
@@ -124,10 +131,11 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
     forward_index_json_["total_documents"] = doc_int_id;
 }
 
+// Save final JSON to disk
 void ForwardIndexBuilder::save_to_file(const std::string& output_path) {
     std::ofstream outfile(output_path);
     if (outfile.is_open()) {
-        // dump(-1) compacts JSON to save space
+        // Use compact mode (-1) to save disk space
         outfile << forward_index_json_.dump(-1); 
         std::cout << "Saved to " << output_path << std::endl;
     } else {
