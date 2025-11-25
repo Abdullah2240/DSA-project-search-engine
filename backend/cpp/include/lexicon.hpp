@@ -47,8 +47,8 @@ private:
     std::unordered_set<std::string> stop_words_;
 
     // Configs
-    int min_frequency_ = 2;
-    int max_frequency_percentile_ = 99;
+    int min_frequency_ = 1;
+    int max_frequency_percentile_ = 100;
     std::string stopwords_path_;
 
     // Helperss
