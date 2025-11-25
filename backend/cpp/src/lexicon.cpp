@@ -5,7 +5,7 @@
 #include <iterator>
 #include <stdexcept>
 
-#include <include/json.hpp>
+#include "json.hpp"
 using json = nlohmann::json;
 
 using namespace std;
@@ -174,29 +174,13 @@ bool Lexicon::build_from_jsonl(const string& cleaned_data_path, const string& ou
         max_freq = cutoff + 1;
     }
 
-    // Determine lower cutoff to exclude the least frequent 1% of words
-    int min_freq_exclusive = INT_MIN; // values <= this will be excluded
-    if (n > 0) {
-        // compute exclude count as 1% of n, but at least 1 and leaving at least one item
-        size_t exclude_least_count = (n * 1) / 100;
-        if (exclude_least_count == 0) exclude_least_count = 1;
-        if (exclude_least_count >= n) {
-            if (n > 1) exclude_least_count = n - 1;
-            else exclude_least_count = 0;
-        }
-        if (exclude_least_count > 0) {
-            min_freq_exclusive = freqs[exclude_least_count - 1];
-        }
-    }
-
-    // Collect significant words, skipping both very-high-frequency words and the least frequent 1%
+    // Collect significant words, skipping only very-high-frequency words
     vector<pair<string,int>> significant;
     for (auto &p : word_frequencies) {
         int freq = p.second;
         if (!is_significant_word(p.first)) continue;
         if (freq < min_frequency_) continue;
         if (max_freq != INT_MAX && !(freq < max_freq)) continue;         // exclude top-frequency words
-        if (min_freq_exclusive != INT_MIN && freq <= min_freq_exclusive) continue; // exclude bottom 1%
         significant.emplace_back(p.first, freq);
     }
 

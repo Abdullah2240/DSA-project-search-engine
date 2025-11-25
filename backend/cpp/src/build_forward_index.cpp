@@ -3,9 +3,9 @@
 
 int main() {
     // Configuration paths
-    const std::string LEXICON_PATH = "backend/data/processed/lexicon.json";
-    const std::string OUTPUT_PATH  = "backend/data/processed/forward_index.json";
-    const std::string DATASET_PATH = "backend/data/processed/cleaned.jsonl"; 
+    const std::string LEXICON_PATH = "data/processed/lexicon.json";
+    const std::string OUTPUT_PATH  = "data/processed/forward_index.json";
+    const std::string DATASET_PATH = "data/processed/cleaned.jsonl"; 
 
     std::cout << "--- Starting Forward Index Build ---" << std::endl;
 

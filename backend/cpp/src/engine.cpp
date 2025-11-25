@@ -21,23 +21,31 @@ void initialize_lexicon(const string& lexicon_path) {
 
 // convert query text into word indices
 // this is the first step before using forward || inverted index
+// Uses same tokenization logic as forward_index.cpp for consistency
 vector<int> tokenize_query(const string& query, Lexicon& lexicon) {
     vector<int> word_indices;
-    stringstream ss(query);
+    string clean_text;
+    
+    // Lowercase and remove non-alphanumeric chars (same as forward_index tokenize)
+    for (char c : query) {
+        if (isalnum(c) || isspace(c)) {
+            clean_text += tolower(c);
+        } else {
+            clean_text += ' ';
+        }
+    }
+
+    // Split by whitespace
+    stringstream ss(clean_text);
     string word;
-
-    // break query text into words
     while (ss >> word) {
-        // lowercase every word so matching becomes easy
-        transform(word.begin(), word.end(), word.begin(),
-                 [](unsigned char c){ return tolower(c); });
-
-        // get id of word from lexicon
-        int idx = lexicon.get_word_index(word);
-
-        // only push valid words
-        if (idx >= 0) {
-            word_indices.push_back(idx);
+        if (!word.empty()) {
+            // get id of word from lexicon
+            int idx = lexicon.get_word_index(word);
+            // only push valid words
+            if (idx >= 0) {
+                word_indices.push_back(idx);
+            }
         }
     }
 

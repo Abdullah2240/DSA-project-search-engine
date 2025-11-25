@@ -97,8 +97,13 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
 
             // Filter tokens against Lexicon and collect stats
             for (const auto& token : tokens) {
-                if (lexicon_.count(token)) {
-                    int id = lexicon_[token];
+                // Ensure token is lowercase (lexicon stores lowercase words)
+                std::string lower_token = token;
+                std::transform(lower_token.begin(), lower_token.end(), lower_token.begin(),
+                             [](unsigned char c) { return std::tolower(c); });
+                
+                if (lexicon_.count(lower_token)) {
+                    int id = lexicon_[lower_token];
                     doc_stats[id].frequency++;
                     doc_stats[id].positions.push_back(current_pos);
                 }

@@ -6,8 +6,8 @@
 using namespace std;
 
 int main(int argc, char* argv[]) {
-    string input_path = "backend/data/processed/cleaned.jsonl";
-    string output_path = "backend/data/processed/lexicon.json";
+    string input_path = "data/processed/cleaned.jsonl";
+    string output_path = "data/processed/lexicon.json";
     
     if (argc >= 2) input_path = argv[1];
     if (argc >= 3) output_path = argv[2];
@@ -16,8 +16,8 @@ int main(int argc, char* argv[]) {
     cout << "Output: " << output_path << "\n\n";
     
     Lexicon lexicon;
-    lexicon.set_min_frequency(2);
-    lexicon.set_max_frequency_percentile(99);
+    lexicon.set_min_frequency(1);
+    lexicon.set_max_frequency_percentile(100);
     
     if (!lexicon.build_from_jsonl(input_path, output_path)) {
         cerr << "Error: Failed to build lexicon\n";

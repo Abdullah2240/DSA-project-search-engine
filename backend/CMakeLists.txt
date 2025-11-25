@@ -18,16 +18,3 @@ add_executable(build_forward_index
     cpp/src/forward_index.cpp 
 )
 
-# Build Python module (if pybind11 is available)
-find_package(pybind11 QUIET)
-if(pybind11_FOUND)
-    pybind11_add_module(engine
-        cpp/src/bindings.cpp
-        cpp/src/engine.cpp
-        cpp/src/lexicon.cpp
-    )
-    message(STATUS "Python module 'engine' will be built")
-else()
-    message(STATUS "pybind11 not found - Python module will not be built")
-    message(STATUS "Install pybind11: pip install pybind11")
-endif()
