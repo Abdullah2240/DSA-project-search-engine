@@ -18,3 +18,8 @@ add_executable(build_forward_index
     cpp/src/forward_index.cpp 
 )
 
+# Build inverted index executable
+add_executable(build_inverted_index 
+    cpp/src/build_inverted_index.cpp 
+    cpp/src/inverted_index.cpp
+)
