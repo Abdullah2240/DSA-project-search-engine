@@ -23,3 +23,9 @@ add_executable(build_inverted_index
     cpp/src/build_inverted_index.cpp 
     cpp/src/inverted_index.cpp
 )
+
+# Build search test executable
+add_executable(test_search 
+    cpp/src/test_search.cpp 
+    cpp/src/lexicon.cpp
+)
