@@ -9,7 +9,7 @@ int main() {
     const std::string OUTPUT_DIR = "backend/data/processed/barrels";
 
     // Number of barrels to create
-    const int NUM_BARRELS = 10; 
+    const int NUM_BARRELS = 100; 
 
     std::cout << "Starting Inverted Index Build" << std::endl;
     std::cout << "Target Barrels: " << NUM_BARRELS << std::endl;
