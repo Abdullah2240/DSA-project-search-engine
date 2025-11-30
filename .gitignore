@@ -93,4 +93,3 @@ Thumbs.db
 
 #Ignore data so it does not get uploaded to github
 backend/data/raw/
-backend/data/processed/
