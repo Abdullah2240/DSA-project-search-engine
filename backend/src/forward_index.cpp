@@ -129,7 +129,7 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
             doc_int_id++;
             if (doc_int_id % 5000 == 0) std::cout << "Processed " << doc_int_id << " docs..." << std::endl;
 
-        } catch (const std::exception& e) { continue; }
+        } catch (const std::exception&) { continue; }
     }
     
     forward_index_json_["forward_index"] = inner_map;

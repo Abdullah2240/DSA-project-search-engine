@@ -25,7 +25,7 @@ int main() {
     try {
         std::cout << "\nLoading Lexicon...\n";
         Lexicon lex;
-        if (!lex.load_from_json("backend/data/processed/lexicon.json")) {
+        if (!lex.load_from_json("data/processed/lexicon.json")) {
             std::cerr << "Failed to load Lexicon.\n";
             return 1;
         }
@@ -57,7 +57,7 @@ int main() {
             int barrel_id = word_id % 100;
             
             if (barrel_cache.find(barrel_id) == barrel_cache.end()) {
-                std::string path = "backend/data/processed/barrels/inverted_barrel_" + std::to_string(barrel_id) + ".json";
+                std::string path = "data/processed/barrels/inverted_barrel_" + std::to_string(barrel_id) + ".json";
                 std::ifstream f(path);
                 if (!f.is_open()) {
                     std::cerr << "Error: Missing barrel " << path << "\n";
