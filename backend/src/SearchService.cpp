@@ -1,10 +1,11 @@
-#include "../../include/SearchService.hpp"
+#include "../include/SearchService.hpp"
 #include <algorithm>
 #include <iostream>
 #include <fstream>
 
 struct SearchResult {
     int doc_id;
+    std::string url;
     int score;
 };
 
@@ -16,14 +17,17 @@ bool compareResults(const SearchResult& a, const SearchResult& b) {
 SearchService::SearchService() {
     std::cout << "[Engine] Initializing Search Service...\n";
     // Ensure this path matches where lexicon.json actually is
-    if (!lexicon_.load_from_json("backend/data/processed/lexicon.json")) {
+    if (!lexicon_.load_from_json("data/processed/lexicon.json")) {
         std::cerr << "[Engine] CRITICAL: Could not load lexicon.json\n";
+    }
+    if (!doc_url_mapper.load("data/processed/docid_to_url.json")) {
+        std::cerr << "[Engine] WARNING: Could not load doc_url_map.json\n";
     }
 }
 
 json& SearchService::get_barrel(int barrel_id) {
     if (barrel_cache_.find(barrel_id) == barrel_cache_.end()) {
-        std::string path = "backend/data/processed/barrels/inverted_barrel_" + std::to_string(barrel_id) + ".json";
+        std::string path = "data/processed/barrels/inverted_barrel_" + std::to_string(barrel_id) + ".json";
         std::ifstream f(path);
         json j;
         if (f.is_open()) {
@@ -57,8 +61,11 @@ std::string SearchService::search(std::string query) {
             std::vector<SearchResult> ranked;
             
             for (auto& entry : raw) {
+                int doc_id = entry[0];
+                int freq = entry[1];
                 // Entry format: [DocID, Frequency, [Positions]]
-                ranked.push_back({entry[0], entry[1]});
+                std::string url = doc_url_mapper.get(doc_id);
+                ranked.push_back({doc_id, url, freq});
             }
             std::sort(ranked.begin(), ranked.end(), compareResults);
 
@@ -66,6 +73,7 @@ std::string SearchService::search(std::string query) {
                 json item;
                 item["docId"] = res.doc_id;
                 item["score"] = res.score;
+                item["url"] = res.url;
                 response_json["results"].push_back(item);
                 
                 if (response_json["results"].size() >= 50) break;

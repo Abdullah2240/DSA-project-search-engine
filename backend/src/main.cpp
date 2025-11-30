@@ -21,5 +21,9 @@ int main() {
     });
 
     std::cout << "Server starting on port 8080...\n";
-    svr.listen("0.0.0.0", 8080);
+    std::cout << "Go to";
+    if(!svr.listen("127.0.0.1", 8080)) {
+        std::cerr << "Error: Could not start server\n";
+    }
+    std::cout << " localhost:8080";
 }

@@ -1,0 +1,42 @@
+import json
+import os
+
+# Get the folder of the current script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Path to input and output files (use raw string or forward slashes)
+INPUT_FILE = os.path.join(BASE_DIR, "..", "data", "raw", "raw(with_urls).jsonl")
+OUTPUT_FILE = os.path.join(BASE_DIR, "..", "data", "processed", "docid_to_url.json")
+
+def build_docid_url_map():
+    mapping = {}
+
+    with open(INPUT_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                print("Skipping invalid line:", line[:100])
+                continue
+
+            doc_id = obj.get("doc_id")
+            url = obj.get("url")
+
+            if doc_id is None or not url:
+                # Skip entries with no URL
+                continue
+
+            mapping[str(doc_id)] = url  # Store as string to avoid big JSON numbers issues
+
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
+        json.dump(mapping, out, indent=2)
+
+    print(f"Done! Wrote {len(mapping)} docID → URL mappings to {OUTPUT_FILE}")
+
+
+if __name__ == "__main__":
+    build_docid_url_map()

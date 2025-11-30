@@ -3,6 +3,7 @@
 #include <vector>
 #include <unordered_map>
 #include "lexicon.hpp"
+#include "doc_url_mapper.hpp"
 #include "json.hpp"
 
 using json = nlohmann::json;
@@ -16,6 +17,7 @@ public:
 
 private:
     Lexicon lexicon_;
+    DocURLMapper doc_url_mapper;
     std::unordered_map<int, json> barrel_cache_;
     json& get_barrel(int barrel_id);
 };
