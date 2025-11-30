@@ -68,3 +68,60 @@ if(WIN32)
 else()
     target_link_libraries(search_engine pthread)
 endif()
+
+# ----------------------------
+# Custom target to generate data file (if needed)
+# ----------------------------
+find_program(PYTHON_EXECUTABLE python python3)
+if(PYTHON_EXECUTABLE)
+    add_custom_target(generate_data
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/data/raw/getData.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating cleaned.jsonl data file from OpenAlex API"
+    )
+else()
+    message(WARNING "Python not found. Cannot generate data automatically.")
+endif()
+
+# ----------------------------
+# Custom target to run all build processes in sequence
+# This builds doc_id to URL map, lexicon, forward index, and inverted index
+# Note: search_engine is a server that runs indefinitely, so run it separately
+# ----------------------------
+if(PYTHON_EXECUTABLE)
+    add_custom_target(run_all
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_docid_to_url.py
+        COMMAND $<TARGET_FILE:build_lexicon>
+        COMMAND $<TARGET_FILE:build_forward_index>
+        COMMAND $<TARGET_FILE:build_inverted_index>
+        DEPENDS build_lexicon build_forward_index build_inverted_index
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Building doc_id to URL map, lexicon, forward index, and inverted index"
+    )
+else()
+    add_custom_target(run_all
+        COMMAND $<TARGET_FILE:build_lexicon>
+        COMMAND $<TARGET_FILE:build_forward_index>
+        COMMAND $<TARGET_FILE:build_inverted_index>
+        DEPENDS build_lexicon build_forward_index build_inverted_index
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running all build processes: lexicon, forward index, and inverted index"
+    )
+    message(WARNING "Python not found. Cannot build doc_id to URL map automatically.")
+endif()
+
+# ----------------------------
+# Custom target to build everything: generate data, build doc_id to URL map, then build all indices
+# ----------------------------
+if(PYTHON_EXECUTABLE)
+    add_custom_target(build_all
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/data/raw/getData.py
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_docid_to_url.py
+        COMMAND $<TARGET_FILE:build_lexicon>
+        COMMAND $<TARGET_FILE:build_forward_index>
+        COMMAND $<TARGET_FILE:build_inverted_index>
+        DEPENDS build_lexicon build_forward_index build_inverted_index
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating data, building doc_id to URL map, and building all indices: lexicon, forward index, and inverted index"
+    )
+endif()
