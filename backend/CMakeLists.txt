@@ -49,6 +49,15 @@ add_executable(test_search
     src/lexicon.cpp
 )
 target_link_libraries(test_search doc_url_mapper)
+# ----------------------------
+# Build test_autocomplete executable
+# ----------------------------
+add_executable(test_autocomplete 
+    src/test_autocomplete.cpp 
+    src/lexicon.cpp
+    src/Trie.cpp
+    src/LexiconWithTrie.cpp
+)
 
 # ----------------------------
 # Build search_engine executable
