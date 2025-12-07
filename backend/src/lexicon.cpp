@@ -85,11 +85,33 @@ vector<string> Lexicon::parse_tokens_from_jsonl_line(const string& json_line) co
     vector<string> tokens;
     try {
         json j = json::parse(json_line);
-        if (!j.contains("tokens") || !j["tokens"].is_array()) return tokens;
-        for (const auto &item : j["tokens"]) {
-            if (item.is_string()) {
-                string s = item.get<string>();
-                if (!s.empty()) tokens.push_back(s);
+        
+        // Handle new format: title_tokens and body_tokens
+        if (j.contains("title_tokens") && j["title_tokens"].is_array()) {
+            for (const auto &item : j["title_tokens"]) {
+                if (item.is_string()) {
+                    string s = item.get<string>();
+                    if (!s.empty()) tokens.push_back(s);
+                }
+            }
+        }
+        
+        if (j.contains("body_tokens") && j["body_tokens"].is_array()) {
+            for (const auto &item : j["body_tokens"]) {
+                if (item.is_string()) {
+                    string s = item.get<string>();
+                    if (!s.empty()) tokens.push_back(s);
+                }
+            }
+        }
+        
+        // Fallback to old format: tokens (for backward compatibility)
+        if (tokens.empty() && j.contains("tokens") && j["tokens"].is_array()) {
+            for (const auto &item : j["tokens"]) {
+                if (item.is_string()) {
+                    string s = item.get<string>();
+                    if (!s.empty()) tokens.push_back(s);
+                }
             }
         }
     } catch (const json::parse_error &) {

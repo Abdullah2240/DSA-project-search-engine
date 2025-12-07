@@ -49,6 +49,15 @@ add_executable(test_search
     src/lexicon.cpp
 )
 target_link_libraries(test_search doc_url_mapper)
+# ----------------------------
+# Build test_autocomplete executable
+# ----------------------------
+add_executable(test_autocomplete 
+    src/test_autocomplete.cpp 
+    src/lexicon.cpp
+    src/Trie.cpp
+    src/LexiconWithTrie.cpp
+)
 
 # ----------------------------
 # Build search_engine executable
@@ -57,6 +66,8 @@ add_executable(search_engine
     src/main.cpp
     src/SearchService.cpp
     src/lexicon.cpp
+    src/Trie.cpp
+    src/LexiconWithTrie.cpp
 )
 target_link_libraries(search_engine doc_url_mapper)
 
@@ -75,9 +86,15 @@ endif()
 find_program(PYTHON_EXECUTABLE python python3)
 if(PYTHON_EXECUTABLE)
     add_custom_target(generate_data
-        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/data/raw/getData.py
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/getData.py
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "Generating cleaned.jsonl data file from OpenAlex API"
+    )
+    
+    add_custom_target(crawl_pdfs
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/crawl_pdf.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Crawling PDFs and extracting body text"
     )
 else()
     message(WARNING "Python not found. Cannot generate data automatically.")
@@ -115,13 +132,14 @@ endif()
 # ----------------------------
 if(PYTHON_EXECUTABLE)
     add_custom_target(build_all
-        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/data/raw/getData.py
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/getData.py
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/crawl_pdf.py
         COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_docid_to_url.py
         COMMAND $<TARGET_FILE:build_lexicon>
         COMMAND $<TARGET_FILE:build_forward_index>
         COMMAND $<TARGET_FILE:build_inverted_index>
         DEPENDS build_lexicon build_forward_index build_inverted_index
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Generating data, building doc_id to URL map, and building all indices: lexicon, forward index, and inverted index"
+        COMMENT "Generating data, crawling PDFs, building doc_id to URL map, and building all indices"
     )
 endif()
