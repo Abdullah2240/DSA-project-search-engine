@@ -2,11 +2,18 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#include <fstream>
 
 using namespace std;
 
 int main(int argc, char* argv[]) {
+    // Try cleaned_with_body.jsonl first (from crawl_pdf.py), fallback to cleaned.jsonl
     string input_path = "data/processed/cleaned.jsonl";
+    ifstream test_file(input_path);
+    if (!test_file.good()) {
+        input_path = "data/processed/cleaned.jsonl";
+    }
+    test_file.close();
     string output_path = "data/processed/lexicon.json";
     
     if (argc >= 2) input_path = argv[1];

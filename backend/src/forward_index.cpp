@@ -28,10 +28,17 @@ std::vector<std::string> tokenize(const std::string& text) {
     return tokens;
 }
 
-// Struct to hold temporary document stats
+// Struct to hold temporary document stats with title/body separation
 struct WordStats {
-    int frequency = 0;
-    std::vector<int> positions;
+    int title_frequency = 0;
+    int body_frequency = 0;
+    std::vector<int> title_positions;
+    std::vector<int> body_positions;
+    
+    // Get total weighted frequency (title words get 3x weight)
+    int get_weighted_frequency() const {
+        return title_frequency * 3 + body_frequency;
+    }
 };
 
 ForwardIndexBuilder::ForwardIndexBuilder() {}
@@ -77,49 +84,82 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
     while (std::getline(dataset, line)) {
         try {
             auto doc_obj = json::parse(line);
-            std::vector<std::string> tokens;
-
-            // Use pre-tokenized list if available, else tokenize raw text
-            if (doc_obj.contains("tokens")) {
-                tokens = doc_obj["tokens"].get<std::vector<std::string>>();
+            
+            // Extract title and body tokens separately
+            std::vector<std::string> title_tokens;
+            std::vector<std::string> body_tokens;
+            
+            // Handle pre-tokenized format with title_tokens and body_tokens
+            if (doc_obj.contains("title_tokens") && doc_obj.contains("body_tokens")) {
+                title_tokens = doc_obj["title_tokens"].get<std::vector<std::string>>();
+                body_tokens = doc_obj["body_tokens"].get<std::vector<std::string>>();
+            } else if (doc_obj.contains("tokens")) {
+                // Legacy format: all tokens together (treat as body)
+                body_tokens = doc_obj["tokens"].get<std::vector<std::string>>();
             } else {
-                std::string text = "";
-                if (doc_obj.contains("title") && !doc_obj["title"].is_null()) 
-                    text += doc_obj["title"].get<std::string>() + " ";
-                if (doc_obj.contains("abstract") && !doc_obj["abstract"].is_null()) 
-                    text += doc_obj["abstract"].get<std::string>();
-                tokens = tokenize(text);
+                // Tokenize from raw text fields
+                if (doc_obj.contains("title") && !doc_obj["title"].is_null()) {
+                    std::string title = doc_obj["title"].get<std::string>();
+                    title_tokens = tokenize(title);
+                }
+                if (doc_obj.contains("body") && !doc_obj["body"].is_null()) {
+                    std::string body = doc_obj["body"].get<std::string>();
+                    body_tokens = tokenize(body);
+                } else if (doc_obj.contains("abstract") && !doc_obj["abstract"].is_null()) {
+                    std::string abstract = doc_obj["abstract"].get<std::string>();
+                    body_tokens = tokenize(abstract);
+                }
             }
 
             // Map automatically sorts keys by WordID (0, 1, 2...)
             std::map<int, WordStats> doc_stats;
-            int current_pos = 0;
+            int title_pos = 0;
+            int body_pos = 0;
 
-            // Filter tokens against Lexicon and collect stats
-            for (const auto& token : tokens) {
-                // Ensure token is lowercase (lexicon stores lowercase words)
+            // Process title tokens
+            for (const auto& token : title_tokens) {
                 std::string lower_token = token;
                 std::transform(lower_token.begin(), lower_token.end(), lower_token.begin(),
                              [](unsigned char c) { return std::tolower(c); });
                 
                 if (lexicon_.count(lower_token)) {
                     int id = lexicon_[lower_token];
-                    doc_stats[id].frequency++;
-                    doc_stats[id].positions.push_back(current_pos);
+                    doc_stats[id].title_frequency++;
+                    doc_stats[id].title_positions.push_back(title_pos);
                 }
-                current_pos++;
+                title_pos++;
+            }
+
+            // Process body tokens
+            for (const auto& token : body_tokens) {
+                std::string lower_token = token;
+                std::transform(lower_token.begin(), lower_token.end(), lower_token.begin(),
+                             [](unsigned char c) { return std::tolower(c); });
+                
+                if (lexicon_.count(lower_token)) {
+                    int id = lexicon_[lower_token];
+                    doc_stats[id].body_frequency++;
+                    doc_stats[id].body_positions.push_back(body_pos);
+                }
+                body_pos++;
             }
 
             // Only store document if it contains valid words
             if (!doc_stats.empty()) {
                 json doc_json;
-                doc_json["doc_length"] = tokens.size(); // Critical for BM25
+                int total_tokens = title_tokens.size() + body_tokens.size();
+                doc_json["doc_length"] = total_tokens; // Critical for BM25
+                doc_json["title_length"] = title_tokens.size();
+                doc_json["body_length"] = body_tokens.size();
 
                 json words_obj;
                 for (const auto& [id, stats] : doc_stats) {
                     words_obj[std::to_string(id)] = {
-                        {"frequency", stats.frequency},
-                        {"positions", stats.positions}
+                        {"title_frequency", stats.title_frequency},
+                        {"body_frequency", stats.body_frequency},
+                        {"weighted_frequency", stats.get_weighted_frequency()},
+                        {"title_positions", stats.title_positions},
+                        {"body_positions", stats.body_positions}
                     };
                 }
                 doc_json["words"] = words_obj;

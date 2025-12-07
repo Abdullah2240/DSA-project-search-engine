@@ -143,6 +143,97 @@
   transform: translateX(2px);
 }
 
+/* Autocomplete Dropdown */
+.autocomplete-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  background: rgba(15, 15, 25, 0.95);
+  backdrop-filter: blur(20px);
+  border: 2px solid rgba(192, 132, 252, 0.2);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(192, 132, 252, 0.1);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 1000;
+  margin-top: 0.25rem;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.autocomplete-dropdown::-webkit-scrollbar {
+  width: 8px;
+}
+
+.autocomplete-dropdown::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.autocomplete-dropdown::-webkit-scrollbar-thumb {
+  background: rgba(192, 132, 252, 0.3);
+  border-radius: 4px;
+}
+
+.autocomplete-dropdown::-webkit-scrollbar-thumb:hover {
+  background: rgba(192, 132, 252, 0.5);
+}
+
+.autocomplete-item {
+  padding: 1rem 1.5rem;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.autocomplete-item:last-child {
+  border-bottom: none;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+  background: rgba(192, 132, 252, 0.15);
+  color: white;
+  padding-left: 1.75rem;
+}
+
+.autocomplete-item .highlight {
+  color: #c084fc;
+  font-weight: 600;
+  background: rgba(192, 132, 252, 0.2);
+  padding: 0 0.125rem;
+  border-radius: 3px;
+}
+
+.autocomplete-item.selected .highlight {
+  background: rgba(192, 132, 252, 0.3);
+  color: #d8b4fe;
+}
+
+/* Add glow effect when dropdown is visible */
+.search-input-container:has(.autocomplete-dropdown) .search-input {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: rgba(192, 132, 252, 0.3);
+}
+
 @media (max-width: 768px) {
   .search-form {
     flex-direction: column;
@@ -161,5 +252,14 @@
   
   .search-icon {
     left: 1rem;
+  }
+
+  .autocomplete-dropdown {
+    max-height: 240px;
+  }
+
+  .autocomplete-item {
+    padding: 0.875rem 1.25rem;
+    font-size: 0.95rem;
   }
 }

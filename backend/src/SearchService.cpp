@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <cctype>
 
 struct SearchResult {
     int doc_id;
@@ -16,9 +17,12 @@ bool compareResults(const SearchResult& a, const SearchResult& b) {
 
 SearchService::SearchService() {
     std::cout << "[Engine] Initializing Search Service...\n";
-    // Ensure this path matches where lexicon.json actually is
-    if (!lexicon_.load_from_json("data/processed/lexicon.json")) {
+    // Load lexicon with trie (trie is built automatically on load)
+    if (!lexicon_trie_.load_from_json("data/processed/lexicon.json")) {
         std::cerr << "[Engine] CRITICAL: Could not load lexicon.json\n";
+    } else {
+        std::cout << "[Engine] Lexicon loaded: " << lexicon_trie_.size() << " words\n";
+        std::cout << "[Engine] Trie built and ready for autocomplete\n";
     }
     if (!doc_url_mapper.load("data/processed/docid_to_url.json")) {
         std::cerr << "[Engine] WARNING: Could not load doc_url_map.json\n";
@@ -49,7 +53,7 @@ std::string SearchService::search(std::string query) {
     std::string clean_query;
     for(char c : query) if(!isspace(c)) clean_query += tolower(c);
 
-    int word_id = lexicon_.get_word_index(clean_query);
+    int word_id = lexicon_trie_.get_word_index(clean_query);
 
     if (word_id != -1) {
         int barrel_id = word_id % 100;
@@ -79,6 +83,33 @@ std::string SearchService::search(std::string query) {
                 if (response_json["results"].size() >= 50) break;
             }
         }
+    }
+    
+    return response_json.dump();
+}
+
+std::string SearchService::autocomplete(const std::string& prefix, int limit) {
+    json response_json;
+    response_json["prefix"] = prefix;
+    response_json["suggestions"] = json::array();
+    
+    if (prefix.empty() || limit <= 0) {
+        return response_json.dump();
+    }
+    
+    // Clean the prefix (lowercase, remove extra spaces)
+    std::string clean_prefix;
+    for (char c : prefix) {
+        if (!std::isspace(c)) {
+            clean_prefix += std::tolower(static_cast<unsigned char>(c));
+        }
+    }
+    
+    // Get autocomplete suggestions from trie
+    std::vector<std::string> suggestions = lexicon_trie_.autocomplete(clean_prefix, limit);
+    
+    for (const auto& suggestion : suggestions) {
+        response_json["suggestions"].push_back(suggestion);
     }
     
     return response_json.dump();

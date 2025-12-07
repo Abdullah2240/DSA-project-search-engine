@@ -53,10 +53,34 @@ void InvertedIndexBuilder::build(const std::string& forward_index_path, const st
                 // Creates the entry for this word
                 InvertedEntry entry;
                 entry.doc_id = doc_id;
-                entry.frequency = stats["frequency"];
                 
-                // Converts JSON array to C++ vector
-                entry.positions = stats["positions"].get<std::vector<int>>();
+                // Use weighted frequency if available, otherwise fall back to regular frequency
+                if (stats.contains("weighted_frequency")) {
+                    entry.frequency = stats["weighted_frequency"].get<int>();
+                } else if (stats.contains("frequency")) {
+                    entry.frequency = stats["frequency"].get<int>();
+                } else {
+                    // Calculate from title and body frequencies
+                    int title_freq = stats.contains("title_frequency") ? stats["title_frequency"].get<int>() : 0;
+                    int body_freq = stats.contains("body_frequency") ? stats["body_frequency"].get<int>() : 0;
+                    entry.frequency = title_freq * 3 + body_freq; // Title words get 3x weight
+                }
+                
+                // Combine positions from title and body
+                std::vector<int> all_positions;
+                if (stats.contains("title_positions")) {
+                    auto title_pos = stats["title_positions"].get<std::vector<int>>();
+                    all_positions.insert(all_positions.end(), title_pos.begin(), title_pos.end());
+                }
+                if (stats.contains("body_positions")) {
+                    auto body_pos = stats["body_positions"].get<std::vector<int>>();
+                    all_positions.insert(all_positions.end(), body_pos.begin(), body_pos.end());
+                }
+                // Fallback to old format
+                if (all_positions.empty() && stats.contains("positions")) {
+                    all_positions = stats["positions"].get<std::vector<int>>();
+                }
+                entry.positions = all_positions;
 
                 // Calculates which barrel this word belongs to
                 int barrel_index = get_barrel_id(word_id);
