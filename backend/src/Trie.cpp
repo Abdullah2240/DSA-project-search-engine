@@ -1,7 +1,7 @@
 #include "Trie.hpp"
 #include <algorithm>
 #include <cctype>
-
+//after this i willl be done finally!
 Trie::Trie() : root_(std::make_unique<TrieNode>()) {}
 
 Trie::~Trie() {
@@ -16,7 +16,7 @@ void Trie::insert(const std::string& word) {
     
     // Traverse/create path for each character
     for (char c : word) {
-        // Convert to lowercase for case-insensitive matching
+        // Convertingto lowercase for case insensitive matching
         char lower_c = std::tolower(static_cast<unsigned char>(c));
         
         if (current->children.find(lower_c) == current->children.end()) {

@@ -3,16 +3,25 @@
 #include <iostream>
 #include <fstream>
 #include <cctype>
+#include <cmath>
 
 struct SearchResult {
     int doc_id;
     std::string url;
-    int score;
+    double score;  // Changed to double for advanced scoring
+    int publication_year;  // For secondary sorting
+    int cited_by_count;   // For tertiary sorting
 };
 
-// Sort by Score TF Descending
+// Sort by: 1) Final score (desc), 2) Publication year (desc - recent first), 3) Citations (desc)
 bool compareResults(const SearchResult& a, const SearchResult& b) {
-    return a.score > b.score;
+    if (std::abs(a.score - b.score) > 0.001) {  // Score differs significantly
+        return a.score > b.score;
+    }
+    if (a.publication_year != b.publication_year) {
+        return a.publication_year > b.publication_year;  // Recent first
+    }
+    return a.cited_by_count > b.cited_by_count;  // More citations first
 }
 
 SearchService::SearchService() {
@@ -27,6 +36,17 @@ SearchService::SearchService() {
     if (!doc_url_mapper.load("data/processed/docid_to_url.json")) {
         std::cerr << "[Engine] WARNING: Could not load doc_url_map.json\n";
     }
+    
+    // Load document metadata for ranking
+    if (!document_metadata_.load("data/processed/document_metadata.json")) {
+        std::cerr << "[Engine] WARNING: Could not load document_metadata.json\n";
+        std::cerr << "[Engine] Run extract_metadata.py to generate metadata file\n";
+    } else {
+        std::cout << "[Engine] Document metadata loaded: " << document_metadata_.size() << " documents\n";
+    }
+    
+    // Load forward index for title frequency lookups
+    load_forward_index();
 }
 
 json& SearchService::get_barrel(int barrel_id) {
@@ -43,6 +63,45 @@ json& SearchService::get_barrel(int barrel_id) {
         }
     }
     return barrel_cache_[barrel_id];
+}
+
+void SearchService::load_forward_index() {
+    std::ifstream f("data/processed/forward_index.json");
+    if (f.is_open()) {
+        try {
+            f >> forward_index_cache_;
+            std::cout << "[Engine] Forward index loaded for ranking\n";
+        } catch (const std::exception& e) {
+            std::cerr << "[Engine] WARNING: Could not parse forward_index.json: " << e.what() << "\n";
+        }
+    } else {
+        std::cerr << "[Engine] WARNING: Could not open forward_index.json\n";
+    }
+}
+
+int SearchService::get_title_frequency(int doc_id, int word_id) const {
+    if (forward_index_cache_.empty() || !forward_index_cache_.contains("forward_index")) {
+        return 0;
+    }
+    
+    try {
+        std::string doc_id_str = std::to_string(doc_id);
+        std::string word_id_str = std::to_string(word_id);
+        
+        if (forward_index_cache_["forward_index"].contains(doc_id_str)) {
+            auto& doc_data = forward_index_cache_["forward_index"][doc_id_str];
+            if (doc_data.contains("words") && doc_data["words"].contains(word_id_str)) {
+                auto& word_stats = doc_data["words"][word_id_str];
+                if (word_stats.contains("title_frequency")) {
+                    return word_stats["title_frequency"].get<int>();
+                }
+            }
+        }
+    } catch (const std::exception&) {
+        // Silently return 0 if any error
+    }
+    
+    return 0;
 }
 
 std::string SearchService::search(std::string query) {
@@ -66,11 +125,41 @@ std::string SearchService::search(std::string query) {
             
             for (auto& entry : raw) {
                 int doc_id = entry[0];
-                int freq = entry[1];
-                // Entry format: [DocID, Frequency, [Positions]]
+                int weighted_freq = entry[1];  // This is weighted_frequency
+                std::vector<int> positions;
+                
+                // Extract positions if available
+                if (entry.size() > 2 && entry[2].is_array()) {
+                    positions = entry[2].get<std::vector<int>>();
+                }
+                
+                // Get title frequency from forward index
+                int title_frequency = get_title_frequency(doc_id, word_id);
+                
+                // Calculate advanced score using RankingScorer
+                ScoreComponents scores = ranking_scorer_.calculate_score(
+                    weighted_freq,
+                    title_frequency,
+                    positions,
+                    doc_id,
+                    &document_metadata_
+                );
+                
+                // Get metadata for sorting
+                int publication_year = document_metadata_.get_publication_year(doc_id);
+                int cited_by_count = document_metadata_.get_cited_by_count(doc_id);
+                
                 std::string url = doc_url_mapper.get(doc_id);
-                ranked.push_back({doc_id, url, freq});
+                ranked.push_back({
+                    doc_id, 
+                    url, 
+                    scores.final_score,
+                    publication_year,
+                    cited_by_count
+                });
             }
+            
+            // Sort by score, then year, then citations
             std::sort(ranked.begin(), ranked.end(), compareResults);
 
             for (const auto& res : ranked) {
@@ -78,6 +167,15 @@ std::string SearchService::search(std::string query) {
                 item["docId"] = res.doc_id;
                 item["score"] = res.score;
                 item["url"] = res.url;
+                
+                // Add metadata if available
+                if (res.publication_year > 0) {
+                    item["publication_year"] = res.publication_year;
+                }
+                if (res.cited_by_count > 0) {
+                    item["cited_by_count"] = res.cited_by_count;
+                }
+                
                 response_json["results"].push_back(item);
                 
                 if (response_json["results"].size() >= 50) break;

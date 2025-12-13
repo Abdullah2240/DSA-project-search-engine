@@ -68,6 +68,8 @@ add_executable(search_engine
     src/lexicon.cpp
     src/Trie.cpp
     src/LexiconWithTrie.cpp
+    src/DocumentMetadata.cpp
+    src/RankingScorer.cpp
 )
 target_link_libraries(search_engine doc_url_mapper)
 
@@ -106,14 +108,21 @@ endif()
 # Note: search_engine is a server that runs indefinitely, so run it separately
 # ----------------------------
 if(PYTHON_EXECUTABLE)
+    add_custom_target(extract_metadata
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_metadata.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Extracting document metadata for ranking"
+    )
+    
     add_custom_target(run_all
         COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_docid_to_url.py
         COMMAND $<TARGET_FILE:build_lexicon>
         COMMAND $<TARGET_FILE:build_forward_index>
         COMMAND $<TARGET_FILE:build_inverted_index>
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_metadata.py
         DEPENDS build_lexicon build_forward_index build_inverted_index
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Building doc_id to URL map, lexicon, forward index, and inverted index"
+        COMMENT "Building doc_id to URL map, lexicon, forward index, inverted index, and metadata"
     )
 else()
     add_custom_target(run_all
