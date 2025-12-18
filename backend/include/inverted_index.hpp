@@ -8,6 +8,7 @@
 #include <fstream>
 #include <filesystem>
 #include "json.hpp" 
+#include "forward_index.hpp"
 
 using json = nlohmann::json;
 
@@ -27,6 +28,9 @@ public:
     InvertedIndexBuilder(int total_barrels);
 
     void build(const std::string& forward_index_path, const std::string& output_dir);
+
+    void update_delta_barrel(int doc_id, const std::map<int, WordStats>& doc_stats);
+    void merge_delta_to_main(const std::string& output_dir);
 
 private:
     int total_barrels_;

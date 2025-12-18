@@ -40,6 +40,9 @@ public:
     size_t size() const;
     bool contains_word(const std::string& word) const;
 
+    // Dynamic Update for new PDF content
+    void update_from_tokens(const std::vector<std::string>& tokens, const std::string& save_path);
+
 private:
     // Internal containers
     std::unordered_map<std::string,int> word_to_index_;

@@ -226,6 +226,42 @@ bool Lexicon::build_from_jsonl(const string& cleaned_data_path, const string& ou
     return save_to_json(output_path);
 }
 
+// NEW: Dynamic Update for new PDF content
+void Lexicon::update_from_tokens(const std::vector<std::string>& tokens, const std::string& save_path) {
+    // 1. Ensure we have the current lexicon loaded
+    if (word_to_index_.empty()) {
+        load_from_json(save_path);
+    }
+
+    // 2. Find next available ID
+    int next_id = 0;
+    if (!word_to_index_.empty()) {
+        next_id = word_to_index_.size(); 
+    }
+
+    bool updated = false;
+    for (const std::string& token : tokens) {
+        std::string w = token;
+        transform(w.begin(), w.end(), w.begin(), [](unsigned char c){ return std::tolower(c); });
+
+        if (!is_significant_word(w)) continue;
+
+        // 3. Only add if it DOES NOT exist
+        if (word_to_index_.find(w) == word_to_index_.end()) {
+            word_to_index_[w] = next_id;
+            index_to_word_.push_back(w);
+            next_id++;
+            updated = true;
+        }
+    }
+
+    // 4. Save immediately if changed
+    if (updated) {
+        cout << "[Lexicon] Added " << (next_id - (next_id - updated)) << " new words.\n";
+        save_to_json(save_path);
+    }
+}
+
 // Save lexicon to JSON
 bool Lexicon::save_to_json(const string& output_path) const {
     json j;

@@ -3,7 +3,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
-#include <map> 
+#include <map>
 
 // Helper tokenizer, cleans text and splits into tokens
 std::vector<std::string> tokenize(const std::string& text) {
@@ -27,19 +27,6 @@ std::vector<std::string> tokenize(const std::string& text) {
     }
     return tokens;
 }
-
-// Struct to hold temporary document stats with title/body separation
-struct WordStats {
-    int title_frequency = 0;
-    int body_frequency = 0;
-    std::vector<int> title_positions;
-    std::vector<int> body_positions;
-    
-    // Get total weighted frequency (title words get 3x weight)
-    int get_weighted_frequency() const {
-        return title_frequency * 3 + body_frequency;
-    }
-};
 
 ForwardIndexBuilder::ForwardIndexBuilder() {}
 
@@ -179,11 +166,54 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
 // Save final JSON to disk
 void ForwardIndexBuilder::save_to_file(const std::string& output_path) {
     std::ofstream outfile(output_path);
-    if (outfile.is_open()) {
-        // Use compact mode (-1) to save disk space
-        outfile << forward_index_json_.dump(-1); 
-        std::cout << "Saved to " << output_path << std::endl;
-    } else {
+    if (!outfile.is_open()) {
         std::cerr << "Error saving file." << std::endl;
+        return;
     }
+
+    // RAM OPTIMIZATION: Write as Line-Delimited JSON (JSONL)
+    // Format: {"doc_id": "10", "data": {...}} \n
+    auto& fwd_idx = forward_index_json_["forward_index"];
+    
+    for (auto& item : fwd_idx.items()) {
+        json line_obj;
+        line_obj["doc_id"] = item.key();
+        line_obj["data"] = item.value();
+        
+        // -1 ensures it prints on exactly one line
+        outfile << line_obj.dump(-1) << "\n";
+    }
+    
+    std::cout << "Saved Forward Index in JSONL format to " << output_path << std::endl;
+}
+
+// Dynamic Content Addition
+void ForwardIndexBuilder::append_document(const std::string& output_path, int doc_id, const std::map<int, WordStats>& doc_stats) {
+    // Open file in APPEND mode (std::ios::app)
+    std::ofstream outfile(output_path, std::ios::app);
+    if (!outfile.is_open()) return;
+
+    // Build the JSON object for this one doc
+    json words_obj;
+    for (const auto& [id, stats] : doc_stats) {
+        words_obj[std::to_string(id)] = {
+            {"title_frequency", stats.title_frequency},
+            {"body_frequency", stats.body_frequency},
+            {"weighted_frequency", stats.get_weighted_frequency()},
+            {"title_positions", stats.title_positions},
+            {"body_positions", stats.body_positions}
+        };
+    }
+
+    json doc_json;
+    doc_json["doc_length"] = 0;
+    doc_json["words"] = words_obj;
+
+    json line_obj;
+    line_obj["doc_id"] = std::to_string(doc_id);
+    line_obj["data"] = doc_json;
+
+    // Append to file
+    outfile << line_obj.dump(-1) << "\n";
+    std::cout << "[ForwardIndex] Appended doc " << doc_id << " to " << output_path << std::endl;
 }

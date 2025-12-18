@@ -5,8 +5,8 @@
 int main() {
     // Configuration paths
     const std::string LEXICON_PATH = "data/processed/lexicon.json";
-    const std::string OUTPUT_PATH  = "data/processed/forward_index.json";
-    // Try cleaned_with_body.jsonl first (from crawl_pdf.py), fallback to cleaned.jsonl
+    const std::string OUTPUT_PATH = "data/processed/forward_index.jsonl";
+    
     std::string DATASET_PATH = "data/processed/cleaned_with_body.jsonl";
     std::ifstream test_file(DATASET_PATH);
     if (!test_file.good()) {
