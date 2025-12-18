@@ -31,12 +31,14 @@ public:
     //   - title_frequency: frequency in title (0 if not in title)
     //   - positions: vector of positions where word appears
     //   - doc_id: document ID for metadata lookup
+    //   - doc_length: total length of document (for relative position calculation)
     //   - metadata: pointer to DocumentMetadata (can be nullptr)
     ScoreComponents calculate_score(
         int weighted_frequency,
         int title_frequency,
         const std::vector<int>& positions,
         int doc_id,
+        int doc_length,
         const DocumentMetadata* metadata = nullptr
     ) const;
     
@@ -55,9 +57,13 @@ private:
     
     // Helper methods
     double calculate_frequency_score(int weighted_frequency) const;
-    double calculate_position_score(const std::vector<int>& positions) const;
+    double calculate_position_score(const std::vector<int>& positions, int doc_length) const;
     double calculate_title_boost(int title_frequency) const;
     double calculate_metadata_score(int doc_id, const DocumentMetadata* metadata) const;
     double calculate_date_boost(int publication_year) const;
 };
+
+
+
+
 

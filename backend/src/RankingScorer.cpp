@@ -28,6 +28,7 @@ ScoreComponents RankingScorer::calculate_score(
     int title_frequency,
     const std::vector<int>& positions,
     int doc_id,
+    int doc_length,
     const DocumentMetadata* metadata
 ) const {
     ScoreComponents scores;
@@ -35,8 +36,8 @@ ScoreComponents RankingScorer::calculate_score(
     // Component 1: Frequency Score (logarithmic to prevent dominance)
     scores.frequency_score = calculate_frequency_score(weighted_frequency);
     
-    // Component 2: Position Score (earlier positions = higher score)
-    scores.position_score = calculate_position_score(positions);
+    // Component 2: Position Score (earlier positions = higher score, using relative position)
+    scores.position_score = calculate_position_score(positions, doc_length);
     
     // Component 3: Title Boost (documents with query in title get boost)
     scores.title_boost = calculate_title_boost(title_frequency);
@@ -68,20 +69,43 @@ double RankingScorer::calculate_frequency_score(int weighted_frequency) const {
     return std::log1p(static_cast<double>(weighted_frequency));
 }
 
-double RankingScorer::calculate_position_score(const std::vector<int>& positions) const {
+double RankingScorer::calculate_position_score(const std::vector<int>& positions, int doc_length) const {
     if (positions.empty()) return 0.0;
     
-    double score = 0.0;
-    // First 10 positions get higher weight
-    // Position 0 gets 1.0, position 9 gets 0.1
-    for (int pos : positions) {
-        if (pos < 10) {
-            score += (10.0 - static_cast<double>(pos)) * 0.1;
-        } else if (pos < 50) {
-            // Positions 10-49 get smaller weight
-            score += (50.0 - static_cast<double>(pos)) * 0.01;
+    // If document length is unknown or invalid, fall back to absolute position logic
+    if (doc_length <= 0) {
+        // Fallback: use absolute position with cutoff at 50
+        double score = 0.0;
+        for (int pos : positions) {
+            if (pos < 10) {
+                score += (10.0 - static_cast<double>(pos)) * 0.1;
+            } else if (pos < 50) {
+                score += (50.0 - static_cast<double>(pos)) * 0.01;
+            }
         }
-        // Positions beyond 50 don't contribute to position score
+        return score / std::max(1.0, static_cast<double>(positions.size()));
+    }
+    
+    // Use relative position (normalized by document length)
+    double score = 0.0;
+    double doc_len = static_cast<double>(doc_length);
+    
+    for (int pos : positions) {
+        double relative_pos = static_cast<double>(pos) / doc_len;  // 0.0 to 1.0
+        
+        if (relative_pos < 0.1) {
+            // First 10% of document: high weight (linear decay)
+            // relative_pos 0.0 → weight 1.0, relative_pos 0.1 → weight 0.0
+            score += (1.0 - relative_pos * 10.0) * 1.0;
+        } else if (relative_pos < 0.5) {
+            // Positions 10%-50%: medium weight (linear decay)
+            // relative_pos 0.1 → weight 0.2, relative_pos 0.5 → weight 0.0
+            score += (1.0 - (relative_pos - 0.1) * 2.5) * 0.2;
+        } else {
+            // Positions 50%-100%: low but non-zero weight (gradual decay)
+            // relative_pos 0.5 → weight 0.05, relative_pos 1.0 → weight 0.01
+            score += (1.1 - relative_pos) * 0.1;
+        }
     }
     
     // Normalize by number of positions (average)
@@ -125,4 +149,8 @@ double RankingScorer::calculate_date_boost(int publication_year) const {
     // Clamp between 0.5 and 2.0 to prevent extreme values
     return std::max(0.5, std::min(2.0, boost));
 }
+
+
+
+
 

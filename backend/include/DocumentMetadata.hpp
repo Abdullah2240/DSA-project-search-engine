@@ -1,7 +1,7 @@
 #pragma once
 // DocumentMetadata.hpp
 // Stores and manages document metadata for ranking purposes
-// Includes: publication dates, citation counts, keywords, etc.
+// Includes publication dates, citation counts, keywords, etc.
 
 #include <string>
 #include <unordered_map>
@@ -13,7 +13,7 @@ using json = nlohmann::json;
 struct DocMetadata {
     int doc_id;
     int publication_year;
-    int publication_month;  // Optional: 0 if not available
+    int publication_month;
     int cited_by_count;     // From page_rank
     std::string title;
     std::string url;
@@ -47,4 +47,8 @@ public:
 private:
     std::unordered_map<int, DocMetadata> metadata_;
 };
+
+
+
+
 
