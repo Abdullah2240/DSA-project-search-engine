@@ -31,4 +31,5 @@ private:
     json& get_barrel(int barrel_id);
     void load_forward_index();
     int get_title_frequency(int doc_id, int word_id) const;
+    int get_document_length(int doc_id) const;
 };

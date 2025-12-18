@@ -104,6 +104,27 @@ int SearchService::get_title_frequency(int doc_id, int word_id) const {
     return 0;
 }
 
+int SearchService::get_document_length(int doc_id) const {
+    if (forward_index_cache_.empty() || !forward_index_cache_.contains("forward_index")) {
+        return 0;
+    }
+    
+    try {
+        std::string doc_id_str = std::to_string(doc_id);
+        
+        if (forward_index_cache_["forward_index"].contains(doc_id_str)) {
+            auto& doc_data = forward_index_cache_["forward_index"][doc_id_str];
+            if (doc_data.contains("doc_length")) {
+                return doc_data["doc_length"].get<int>();
+            }
+        }
+    } catch (const std::exception&) {
+        // Silently return 0 if any error
+    }
+    
+    return 0;
+}
+
 std::string SearchService::search(std::string query) {
     json response_json;
     response_json["query"] = query;
@@ -133,8 +154,9 @@ std::string SearchService::search(std::string query) {
                     positions = entry[2].get<std::vector<int>>();
                 }
                 
-                // Get title frequency from forward index
+                // Get title frequency and document length from forward index
                 int title_frequency = get_title_frequency(doc_id, word_id);
+                int doc_length = get_document_length(doc_id);
                 
                 // Calculate advanced score using RankingScorer
                 ScoreComponents scores = ranking_scorer_.calculate_score(
@@ -142,6 +164,7 @@ std::string SearchService::search(std::string query) {
                     title_frequency,
                     positions,
                     doc_id,
+                    doc_length,
                     &document_metadata_
                 );
                 
