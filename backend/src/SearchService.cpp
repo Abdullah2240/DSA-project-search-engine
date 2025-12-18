@@ -4,6 +4,7 @@
 #include <fstream>
 #include <cctype>
 #include <cmath>
+#include <sstream>
 
 struct SearchResult {
     int doc_id;
@@ -22,6 +23,17 @@ bool compareResults(const SearchResult& a, const SearchResult& b) {
         return a.publication_year > b.publication_year;  // Recent first
     }
     return a.cited_by_count > b.cited_by_count;  // More citations first
+}
+
+//Split query into words
+std::vector<std::string> split_query(const std::string& str) {
+    std::vector<std::string> words;
+    std::stringstream ss(str);
+    std::string word;
+    while (ss >> word) {
+        words.push_back(word);
+    }
+    return words;
 }
 
 SearchService::SearchService() {
@@ -45,8 +57,88 @@ SearchService::SearchService() {
         std::cout << "[Engine] Document metadata loaded: " << document_metadata_.size() << " documents\n";
     }
     
-    // Load forward index for title frequency lookups
-    load_forward_index();
+    // build map instead of loading full forward index
+    build_offset_map();
+
+    //load delta index
+    load_delta_index();
+}
+
+// Map builder for forward index offsets
+void SearchService::build_offset_map() {
+    std::cout << "[Engine] Building Forward Index Offset Map...\n";
+    // NOTE: We are now reading the .jsonl file!
+    std::ifstream f("data/processed/forward_index.jsonl"); 
+    if (!f.is_open()) {
+        std::cerr << "[Engine] WARNING: Could not open forward_index.jsonl\n";
+        return;
+    }
+
+    std::string line;
+    std::streampos current_offset = 0; 
+
+    while (std::getline(f, line)) {
+        if (line.empty()) {
+            current_offset = f.tellg(); 
+            continue;
+        }
+
+        try {
+            // Parse ONLY the ID to save RAM
+            size_t id_pos = line.find("\"doc_id\"");
+            if (id_pos != std::string::npos) {
+                size_t start_quote = line.find("\"", id_pos + 9);
+                size_t end_quote = line.find("\"", start_quote + 1);
+                std::string id_str = line.substr(start_quote + 1, end_quote - start_quote - 1);
+                int doc_id = std::stoi(id_str);
+                
+                doc_offsets_[doc_id] = current_offset;
+            }
+        } catch (...) {}
+        
+        current_offset = f.tellg(); 
+    }
+    std::cout << "[Engine] Mapped " << doc_offsets_.size() << " documents.\n";
+}
+
+// delta index loader
+void SearchService::load_delta_index() {
+    std::ifstream f("data/processed/barrels/inverted_delta.json");
+    if (!f.good()) return; 
+
+    try {
+        json j;
+        f >> j;
+        for (auto& item : j.items()) {
+            int word_id = std::stoi(item.key());
+            std::vector<DeltaEntry> entries;
+            for (auto& elem : item.value()) {
+                entries.push_back({
+                    elem[0].get<int>(), // doc_id
+                    elem[1].get<int>(), // freq
+                    elem[2].get<std::vector<int>>() // positions
+                });
+            }
+            delta_index_[word_id] = entries;
+        }
+        std::cout << "[Engine] Delta Index loaded for dynamic content.\n";
+    } catch (...) {}
+}
+
+// disk fetcher for forward index
+json SearchService::get_document_from_disk(int doc_id) {
+    if (doc_offsets_.find(doc_id) == doc_offsets_.end()) return nullptr;
+
+    std::ifstream f("data/processed/forward_index.jsonl");
+    f.seekg(doc_offsets_[doc_id]); 
+
+    std::string line;
+    if (std::getline(f, line)) {
+        try {
+            return json::parse(line);
+        } catch (...) {}
+    }
+    return nullptr;
 }
 
 json& SearchService::get_barrel(int barrel_id) {
@@ -65,63 +157,26 @@ json& SearchService::get_barrel(int barrel_id) {
     return barrel_cache_[barrel_id];
 }
 
-void SearchService::load_forward_index() {
-    std::ifstream f("data/processed/forward_index.json");
-    if (f.is_open()) {
-        try {
-            f >> forward_index_cache_;
-            std::cout << "[Engine] Forward index loaded for ranking\n";
-        } catch (const std::exception& e) {
-            std::cerr << "[Engine] WARNING: Could not parse forward_index.json: " << e.what() << "\n";
-        }
-    } else {
-        std::cerr << "[Engine] WARNING: Could not open forward_index.json\n";
-    }
-}
-
-int SearchService::get_title_frequency(int doc_id, int word_id) const {
-    if (forward_index_cache_.empty() || !forward_index_cache_.contains("forward_index")) {
-        return 0;
-    }
+int SearchService::get_title_frequency(int doc_id, int word_id) {
+    json doc = get_document_from_disk(doc_id);
+    if (doc == nullptr) return 0;
     
     try {
-        std::string doc_id_str = std::to_string(doc_id);
         std::string word_id_str = std::to_string(word_id);
-        
-        if (forward_index_cache_["forward_index"].contains(doc_id_str)) {
-            auto& doc_data = forward_index_cache_["forward_index"][doc_id_str];
-            if (doc_data.contains("words") && doc_data["words"].contains(word_id_str)) {
-                auto& word_stats = doc_data["words"][word_id_str];
-                if (word_stats.contains("title_frequency")) {
-                    return word_stats["title_frequency"].get<int>();
-                }
-            }
+        if (doc["data"]["words"].contains(word_id_str)) {
+            return doc["data"]["words"][word_id_str]["title_frequency"].get<int>();
         }
-    } catch (const std::exception&) {
-        // Silently return 0 if any error
-    }
-    
+    } catch (...) {}
     return 0;
 }
 
-int SearchService::get_document_length(int doc_id) const {
-    if (forward_index_cache_.empty() || !forward_index_cache_.contains("forward_index")) {
-        return 0;
-    }
+int SearchService::get_document_length(int doc_id) {
+    json doc = get_document_from_disk(doc_id);
+    if (doc == nullptr) return 0;
     
     try {
-        std::string doc_id_str = std::to_string(doc_id);
-        
-        if (forward_index_cache_["forward_index"].contains(doc_id_str)) {
-            auto& doc_data = forward_index_cache_["forward_index"][doc_id_str];
-            if (doc_data.contains("doc_length")) {
-                return doc_data["doc_length"].get<int>();
-            }
-        }
-    } catch (const std::exception&) {
-        // Silently return 0 if any error
-    }
-    
+        return doc["data"]["doc_length"].get<int>();
+    } catch (...) {}
     return 0;
 }
 
@@ -130,82 +185,144 @@ std::string SearchService::search(std::string query) {
     response_json["query"] = query;
     response_json["results"] = json::array();
 
-    std::string clean_query;
-    for(char c : query) if(!isspace(c)) clean_query += tolower(c);
+    // 1. Clean and Split Query
+    std::string clean_query_str;
+    for(char c : query) {
+        if(std::isalnum(static_cast<unsigned char>(c))) {
+            clean_query_str += std::tolower(static_cast<unsigned char>(c));
+        } else {
+            clean_query_str += ' ';
+        }
+    }
 
-    int word_id = lexicon_trie_.get_word_index(clean_query);
+    std::vector<std::string> query_words = split_query(clean_query_str);
+    if (query_words.empty()) return response_json.dump();
 
-    if (word_id != -1) {
-        int barrel_id = word_id % 100;
-        json& barrel = get_barrel(barrel_id);
-        std::string id_str = std::to_string(word_id);
+    // Score accumulation maps
+    std::unordered_map<int, double> doc_scores;
+    std::unordered_map<int, int> doc_match_count;
+    std::unordered_map<int, std::map<int, std::vector<int>>> doc_positions_map;
 
-        if (barrel.contains(id_str)) {
-            auto raw = barrel[id_str];
-            std::vector<SearchResult> ranked;
+    int valid_query_words = 0;
+
+    // 2. Iterate Words
+    for (int i = 0; i < query_words.size(); ++i) {
+        std::string word = query_words[i];
+        int word_id = lexicon_trie_.get_word_index(word);
+
+        if (word_id != -1) {
+            valid_query_words++;
+            std::string id_str = std::to_string(word_id);
             
-            for (auto& entry : raw) {
-                int doc_id = entry[0];
-                int weighted_freq = entry[1];  // This is weighted_frequency
-                std::vector<int> positions;
-                
-                // Extract positions if available
-                if (entry.size() > 2 && entry[2].is_array()) {
-                    positions = entry[2].get<std::vector<int>>();
+            // A. Retrieve Main Barrel Data
+            int barrel_id = word_id % 100;
+            json& barrel = get_barrel(barrel_id);
+            
+            // Temporary list to hold entries from both Barrel AND Delta
+            std::vector<DeltaEntry> combined_entries;
+
+            // Load from Disk Barrel
+            if (barrel.contains(id_str)) {
+                auto raw = barrel[id_str];
+                for (auto& entry : raw) {
+                    if (entry.size() < 3) continue;
+                    combined_entries.push_back({
+                        entry[0].get<int>(), // doc_id
+                        entry[1].get<int>(), // freq
+                        entry[2].get<std::vector<int>>() // pos
+                    });
                 }
+            }
+
+            // B. Retrieve Delta Index Data (Dynamic Content)
+            if (delta_index_.count(word_id)) {
+                const auto& deltas = delta_index_[word_id];
+                combined_entries.insert(combined_entries.end(), deltas.begin(), deltas.end());
+            }
+
+            // C. Process Combined Entries
+            for (auto& entry : combined_entries) {
+                int doc_id = entry.doc_id;
+                int weighted_freq = entry.frequency;
+                std::vector<int> positions = entry.positions;
+
+                // Optimization: Don't fetch doc_len/title_freq yet to save I/O
+                // Use default values for initial filtering or fetch if strictly needed.
+                // For accuracy, we fetch them now.
                 
-                // Get title frequency and document length from forward index
-                int title_frequency = get_title_frequency(doc_id, word_id);
-                int doc_length = get_document_length(doc_id);
-                
-                // Calculate advanced score using RankingScorer
+                int title_freq = get_title_frequency(doc_id, word_id);
+                int doc_len = get_document_length(doc_id);
+
+                // Calculate advanced score using Teammate's Scorer
                 ScoreComponents scores = ranking_scorer_.calculate_score(
                     weighted_freq,
-                    title_frequency,
+                    title_freq,
                     positions,
                     doc_id,
-                    doc_length,
+                    doc_len,
                     &document_metadata_
                 );
-                
-                // Get metadata for sorting
-                int publication_year = document_metadata_.get_publication_year(doc_id);
-                int cited_by_count = document_metadata_.get_cited_by_count(doc_id);
-                
-                std::string url = doc_url_mapper.get(doc_id);
-                ranked.push_back({
-                    doc_id, 
-                    url, 
-                    scores.final_score,
-                    publication_year,
-                    cited_by_count
-                });
-            }
-            
-            // Sort by score, then year, then citations
-            std::sort(ranked.begin(), ranked.end(), compareResults);
 
-            for (const auto& res : ranked) {
-                json item;
-                item["docId"] = res.doc_id;
-                item["score"] = res.score;
-                item["url"] = res.url;
-                
-                // Add metadata if available
-                if (res.publication_year > 0) {
-                    item["publication_year"] = res.publication_year;
-                }
-                if (res.cited_by_count > 0) {
-                    item["cited_by_count"] = res.cited_by_count;
-                }
-                
-                response_json["results"].push_back(item);
-                
-                if (response_json["results"].size() >= 50) break;
+                doc_scores[doc_id] += scores.final_score;
+                doc_match_count[doc_id]++;
+                doc_positions_map[doc_id][i] = positions;
             }
         }
     }
-    
+
+    if (valid_query_words == 0) return response_json.dump();
+
+    // 3. Filter Intersection (AND Logic) and Apply Proximity
+    std::vector<SearchResult> final_results;
+
+    for (auto const& [doc_id, count] : doc_match_count) {
+        // Strict AND logic: Doc must contain ALL valid query words
+        if (count == valid_query_words) {
+            double final_score = doc_scores[doc_id];
+
+            // Proximity bonus
+            for (int k = 0; k < query_words.size() - 1; ++k) {
+                if (doc_positions_map[doc_id].count(k) && doc_positions_map[doc_id].count(k + 1)) {
+                    const auto& posA = doc_positions_map[doc_id][k];
+                    const auto& posB = doc_positions_map[doc_id][k + 1];
+
+                    bool found_adjacent = false;
+                    for (int a : posA) {
+                        for (int b : posB) {
+                            if (b == a + 1) { found_adjacent = true; break; }
+                        }
+                        if (found_adjacent) break;
+                    }
+                    if (found_adjacent) final_score += 100.0; 
+                }
+            }
+
+            // Get Metadata
+            std::string url = doc_url_mapper.get(doc_id);
+            int pub_year = document_metadata_.get_publication_year(doc_id);
+            int citations = document_metadata_.get_cited_by_count(doc_id);
+
+            final_results.push_back({doc_id, url, final_score, pub_year, citations});
+        }
+    }
+
+    // 4. Sort
+    std::sort(final_results.begin(), final_results.end(), compareResults);
+
+    // 5. Build JSON
+    for (const auto& res : final_results) {
+        json item;
+        item["docId"] = res.doc_id;
+        item["score"] = res.score;
+        item["url"] = res.url;
+        
+        if (res.publication_year > 0) item["publication_year"] = res.publication_year;
+        if (res.cited_by_count > 0) item["cited_by_count"] = res.cited_by_count;
+        
+        response_json["results"].push_back(item);
+        if (response_json["results"].size() >= 50) break;
+    }
+        
     return response_json.dump();
 }
 

@@ -2,6 +2,9 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <fstream>
+#include <iostream>
+#include <map>
 #include "LexiconWithTrie.hpp"
 #include "doc_url_mapper.hpp"
 #include "DocumentMetadata.hpp"
@@ -9,6 +12,13 @@
 #include "json.hpp"
 
 using json = nlohmann::json;
+
+// Struct for Delta Index entries
+struct DeltaEntry {
+    int doc_id;
+    int frequency;
+    std::vector<int> positions;
+};
 
 class SearchService {
 public:
@@ -26,10 +36,21 @@ private:
     DocumentMetadata document_metadata_;
     RankingScorer ranking_scorer_;
     std::unordered_map<int, json> barrel_cache_;
-    json forward_index_cache_;  // Cache for forward index to get title_frequency
-    
+    // RAM OPTIMIZATION: Maps DocID -> Byte Position in forward_index.jsonl
+    std::unordered_map<int, std::streampos> doc_offsets_; 
+
+    // DYNAMIC SEARCH: Holds the small "new" index in RAM
+    std::unordered_map<int, std::vector<DeltaEntry>> delta_index_;
+
+    // Helpers
     json& get_barrel(int barrel_id);
-    void load_forward_index();
-    int get_title_frequency(int doc_id, int word_id) const;
-    int get_document_length(int doc_id) const;
+    
+    // Replaces load_forward_index
+    void build_offset_map();
+    void load_delta_index();
+    json get_document_from_disk(int doc_id);
+
+    // Updated getters to use disk seek
+    int get_title_frequency(int doc_id, int word_id);
+    int get_document_length(int doc_id);
 };
