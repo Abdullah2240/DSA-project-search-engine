@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 extract_metadata.py
-Extracts document metadata from cleaned.jsonl and saves to document_metadata.json
+Extracts document metadata from cleaned.jsonl or cleaned_with_body.jsonl
 Extracts: publication_year, publication_month, cited_by_count, title, url, keywords
 """
 
@@ -68,62 +68,52 @@ def extract_metadata_from_entry(entry):
     """Extract metadata from a single JSONL entry"""
     metadata = {}
     
-    # Doc ID
-    doc_id = entry.get("doc_id", -1)
-    if doc_id == -1:
+    # Extract doc_id (required)
+    if "doc_id" not in entry:
         return None
     
-    metadata["doc_id"] = doc_id
+    metadata["doc_id"] = entry["doc_id"]
     
-    # Title
-    if "title" in entry:
-        metadata["title"] = entry["title"]
+    # Extract publication year
+    pub_year = 0
+    if "publication_date" in entry and entry["publication_date"]:
+        pub_year = extract_year_from_date(entry["publication_date"])
+    elif "year" in entry and entry["year"]:
+        try:
+            pub_year = int(entry["year"])
+        except:
+            pass
     
-    # URL
-    if "url" in entry:
-        metadata["url"] = entry["url"]
+    metadata["publication_year"] = pub_year
     
-    # Publication year and month
-    publication_year = 0
-    publication_month = 0
+    # Extract publication month
+    pub_month = 0
+    if "publication_date" in entry and entry["publication_date"]:
+        pub_month = extract_month_from_date(entry["publication_date"])
     
-    # Try different fields for publication date
-    date_fields = ["publication_date", "publication_year", "year", "date", "published_date", "release_date"]
-    for field in date_fields:
-        if field in entry and entry[field]:
-            if field == "publication_year" or field == "year":
-                try:
-                    publication_year = int(entry[field])
-                except:
-                    pass
-            else:
-                date_str = str(entry[field])
-                if not publication_year:
-                    publication_year = extract_year_from_date(date_str)
-                if not publication_month:
-                    publication_month = extract_month_from_date(date_str)
-            if publication_year:
-                break
+    metadata["publication_month"] = pub_month
     
-    metadata["publication_year"] = publication_year
-    metadata["publication_month"] = publication_month
-    
-    # Citation count from page_rank
+    # Extract cited_by_count from page_rank
     cited_by_count = 0
     if "page_rank" in entry and isinstance(entry["page_rank"], dict):
         cited_by_count = entry["page_rank"].get("cited_by_count", 0)
-    elif "cited_by_count" in entry:
-        cited_by_count = entry.get("cited_by_count", 0)
     
     metadata["cited_by_count"] = cited_by_count
     
-    # Keywords (if available)
+    # Extract title
+    title = entry.get("title", "")
+    metadata["title"] = title
+    
+    # Extract URL
+    url = entry.get("url", "")
+    metadata["url"] = url
+    
+    # Extract keywords (if available)
     keywords = []
     if "keywords" in entry:
         if isinstance(entry["keywords"], list):
             keywords = entry["keywords"]
         elif isinstance(entry["keywords"], str):
-            # Split comma-separated keywords
             keywords = [k.strip() for k in entry["keywords"].split(",")]
     
     metadata["keywords"] = keywords
@@ -131,22 +121,40 @@ def extract_metadata_from_entry(entry):
     return metadata
 
 def main():
-    # Default paths
-    input_file = "data/processed/cleaned.jsonl"
-    output_file = "data/processed/document_metadata.json"
+    # Get the directory of this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Allow command-line arguments
+    # Try cleaned_with_body.jsonl first (from PDF crawler), fall back to cleaned.jsonl
+    input_file_with_body = os.path.join(script_dir, "..", "data", "processed", "test.jsonl")
+    input_file_basic = os.path.join(script_dir, "..", "data", "processed", "test.jsonl")
+    output_file = os.path.join(script_dir, "..", "data", "processed", "document_metadata.json")
+    
+    # Allow command-line arguments to override
     if len(sys.argv) >= 2:
-        input_file = sys.argv[1]
+        input_file_with_body = sys.argv[1]
+        input_file_basic = sys.argv[1]
     if len(sys.argv) >= 3:
         output_file = sys.argv[2]
     
-    # Check if input file exists
-    if not os.path.exists(input_file):
-        print(f"Error: Input file not found: {input_file}")
+    # Determine which input file to use
+    input_file = None
+    if os.path.exists(input_file_with_body):
+        input_file = input_file_with_body
+        print(f"Using input file: {input_file} (with PDF body content)")
+    elif os.path.exists(input_file_basic):
+        input_file = input_file_basic
+        print(f"Using input file: {input_file} (basic metadata only)")
+    else:
+        print(f"Error: No input file found!")
+        print(f"Searched for:")
+        print(f"  1. {input_file_with_body}")
+        print(f"  2. {input_file_basic}")
+        print()
+        print("Please run one of the following first:")
+        print("  1. python scripts/getData.py")
+        print("  2. python scripts/crawl_pdf.py (after running getData.py)")
         sys.exit(1)
     
-    print(f"Extracting metadata from: {input_file}")
     print(f"Output will be saved to: {output_file}")
     
     metadata_dict = {}
@@ -199,8 +207,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-

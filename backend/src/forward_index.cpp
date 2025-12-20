@@ -55,7 +55,7 @@ bool ForwardIndexBuilder::load_lexicon(const std::string& filepath) {
     return true;
 }
 
-// Reads dataset line-by-line and builds the index
+// Reads dataset line-by-line and builds the index DIRECTLY to disk
 void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
     std::cout << "Reading dataset: " << dataset_path << std::endl;
     std::ifstream dataset(dataset_path);
@@ -64,8 +64,17 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
         return;
     }
 
+    // OPTIMIZATION: Open output file immediately.
+    // We write line-by-line to avoid storing the whole index in RAM.
+    std::string output_path = "data/processed/forward_index.jsonl";
+    std::ofstream outfile(output_path);
+    if (!outfile.is_open()) {
+        std::cerr << "CRITICAL: Could not create " << output_path << std::endl;
+        return;
+    }
+    std::cout << "Streaming index to " << output_path << "..." << std::endl;
+
     std::string line;
-    json inner_map; 
     int doc_int_id = 0;
 
     while (std::getline(dataset, line)) {
@@ -150,41 +159,30 @@ void ForwardIndexBuilder::build_index(const std::string& dataset_path) {
                     };
                 }
                 doc_json["words"] = words_obj;
-                inner_map[std::to_string(doc_int_id)] = doc_json;
+                
+                // OPTIMIZATION: Write immediately to disk instead of map
+                json line_obj;
+                line_obj["doc_id"] = std::to_string(doc_int_id);
+                line_obj["data"] = doc_json;
+
+                // Use \n instead of endl to avoid excessive flushing
+                outfile << line_obj.dump(-1) << "\n";
             }
             
             doc_int_id++;
-            if (doc_int_id % 5000 == 0) std::cout << "Processed " << doc_int_id << " docs..." << std::endl;
+            // Simple logging to avoid spamming I/O
+            if (doc_int_id % 5000 == 0) std::cout << "Processed " << doc_int_id << " docs...\r" << std::flush;
 
         } catch (const std::exception&) { continue; }
     }
     
-    forward_index_json_["forward_index"] = inner_map;
-    forward_index_json_["total_documents"] = doc_int_id;
+    std::cout << "\nBuild Complete. Total documents processed: " << doc_int_id << std::endl;
 }
 
-// Save final JSON to disk
+// Optimization: This is now a dummy function because we saved during the build.
 void ForwardIndexBuilder::save_to_file(const std::string& output_path) {
-    std::ofstream outfile(output_path);
-    if (!outfile.is_open()) {
-        std::cerr << "Error saving file." << std::endl;
-        return;
-    }
-
-    // RAM OPTIMIZATION: Write as Line-Delimited JSON (JSONL)
-    // Format: {"doc_id": "10", "data": {...}} \n
-    auto& fwd_idx = forward_index_json_["forward_index"];
-    
-    for (auto& item : fwd_idx.items()) {
-        json line_obj;
-        line_obj["doc_id"] = item.key();
-        line_obj["data"] = item.value();
-        
-        // -1 ensures it prints on exactly one line
-        outfile << line_obj.dump(-1) << "\n";
-    }
-    
-    std::cout << "Saved Forward Index in JSONL format to " << output_path << std::endl;
+    std::cout << "NOTE: Index was streamed directly to " << output_path << " during build.\n";
+    std::cout << "No further action needed in save_to_file." << std::endl;
 }
 
 // Dynamic Content Addition

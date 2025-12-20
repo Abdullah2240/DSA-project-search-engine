@@ -83,6 +83,20 @@ int DocumentMetadata::get_cited_by_count(int doc_id) const {
     return it->second.cited_by_count;
 }
 
+void DocumentMetadata::add_document(int doc_id, int pub_year, int pub_month, int citations, 
+                                    const std::string& title, const std::string& url) {
+    DocMetadata meta;
+    meta.doc_id = doc_id;
+    meta.publication_year = pub_year;
+    meta.publication_month = pub_month;
+    meta.cited_by_count = citations;
+    meta.title = title;
+    meta.url = url;
+    
+    metadata_[doc_id] = meta;
+    std::cout << "[Metadata] Added metadata for doc " << doc_id << std::endl;
+}
+
 
 
 

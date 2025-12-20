@@ -27,3 +27,7 @@ const std::string& DocURLMapper::get(int doc_id) const {
     auto it = urls.find(doc_id);
     return (it != urls.end()) ? it->second : empty;
 }
+
+void DocURLMapper::add_mapping(int doc_id, const std::string& url) {
+    urls[doc_id] = url;
+}

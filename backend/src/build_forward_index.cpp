@@ -7,10 +7,10 @@ int main() {
     const std::string LEXICON_PATH = "data/processed/lexicon.json";
     const std::string OUTPUT_PATH = "data/processed/forward_index.jsonl";
     
-    std::string DATASET_PATH = "data/processed/cleaned_with_body.jsonl";
+    std::string DATASET_PATH = "data/processed/test.jsonl";
     std::ifstream test_file(DATASET_PATH);
     if (!test_file.good()) {
-        DATASET_PATH = "data/processed/cleaned.jsonl";
+        DATASET_PATH = "data/processed/test.jsonl";
     }
     test_file.close(); 
 

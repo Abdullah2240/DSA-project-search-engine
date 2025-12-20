@@ -41,23 +41,8 @@ add_library(doc_url_mapper STATIC
     include/doc_url_mapper.hpp
 )
 
-# ----------------------------
-# Build test_search executable
-# ----------------------------
-add_executable(test_search 
-    src/test_search.cpp 
-    src/lexicon.cpp
-)
-target_link_libraries(test_search doc_url_mapper)
-# ----------------------------
-# Build test_autocomplete executable
-# ----------------------------
-add_executable(test_autocomplete 
-    src/test_autocomplete.cpp 
-    src/lexicon.cpp
-    src/Trie.cpp
-    src/LexiconWithTrie.cpp
-)
+
+target_link_libraries(doc_url_mapper)
 
 # ----------------------------
 # Build search_engine executable
@@ -70,6 +55,7 @@ add_executable(search_engine
     src/LexiconWithTrie.cpp
     src/DocumentMetadata.cpp
     src/RankingScorer.cpp
+    src/SemanticScorer.cpp
 )
 target_link_libraries(search_engine doc_url_mapper)
 

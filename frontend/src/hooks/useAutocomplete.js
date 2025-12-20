@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { buildAutocompleteUrl } from '../config/api';
 
 // Cache for autocomplete results
 const autocompleteCache = new Map();
@@ -55,7 +56,7 @@ export function useAutocomplete(query, enabled = true) {
     setError(null);
 
     try {
-      const apiUrl = `http://localhost:8080/autocomplete?q=${encodeURIComponent(prefix)}&limit=8`;
+      const apiUrl = buildAutocompleteUrl(prefix, 8);
       const res = await fetch(apiUrl, {
         signal: abortControllerRef.current.signal
       });

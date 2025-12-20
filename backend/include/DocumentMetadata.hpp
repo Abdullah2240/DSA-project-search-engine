@@ -43,6 +43,10 @@ public:
     
     // Get total number of documents with metadata
     size_t size() const { return metadata_.size(); }
+    
+    // Add new document metadata (for dynamic uploads)
+    void add_document(int doc_id, int pub_year, int pub_month, int citations, 
+                     const std::string& title, const std::string& url);
 
 private:
     std::unordered_map<int, DocMetadata> metadata_;

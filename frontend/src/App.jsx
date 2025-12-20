@@ -1,6 +1,9 @@
 import SearchBar from './Components/SearchBar'
-import {useState} from 'react'
-import './App.css'
+import SearchResults from './Components/SearchResults'
+import PDFUpload from './Components/PDFUpload';
+import { useState } from 'react';
+import './App.css';
+import { buildSearchUrl, API_ENDPOINTS } from './config/api';
 
 function App() {
   const [results, setResults] = useState([]);
@@ -8,6 +11,8 @@ function App() {
   const [error, setError] = useState(null);
   const [searchStats, setSearchStats] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [activeTab, setActiveTab] = useState('search'); // 'search' or 'upload'
+  const [currentPage, setCurrentPage] = useState(1);
 
   const performSearch = async (query) => {
     setIsLoading(true);
@@ -15,7 +20,7 @@ function App() {
     setHasSearched(true);
     
     try {
-      const apiUrl = `http://localhost:8080/search?q=${encodeURIComponent(query)}`;
+      const apiUrl = buildSearchUrl(query);
       const res = await fetch(apiUrl);
       
       if (!res.ok) {
@@ -47,6 +52,36 @@ function App() {
     return stars;
   }
 
+  const handleFileUpload = async (files) => {
+    setIsLoading(true);
+    setError(null);
+    
+    const formData = new FormData();
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+
+    try {
+      const response = await fetch(API_ENDPOINTS.UPLOAD, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const result = await response.json();
+      alert(`Successfully uploaded ${result.uploadedCount || files.length} files.`);
+      
+    } catch (err) {
+      console.error('Upload error:', err);
+      setError('Failed to upload files. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <>
       <div className="galaxy-container">
@@ -64,84 +99,72 @@ function App() {
           <p>Explore the cosmos of knowledge</p>
         </div>
 
-        <div className="search-container">
-          <SearchBar onSearch={performSearch} isLoading={isLoading} />
+        <div className="tabs">
+          <button 
+            className={`tab-button ${activeTab === 'search' ? 'active' : ''}`}
+            onClick={() => setActiveTab('search')}
+          >
+            Search
+          </button>
+          <button 
+            className={`tab-button ${activeTab === 'upload' ? 'active' : ''}`}
+            onClick={() => setActiveTab('upload')}
+          >
+            Upload PDFs
+          </button>
         </div>
 
-        {isLoading && (
-          <div className="loading-container">
-            <div>
-              <div className="galaxy-loader"></div>
-              <p className="loader-text">Searching the galaxy...</p>
+        {activeTab === 'search' ? (
+          <>
+            <div className="search-container">
+              <SearchBar onSearch={performSearch} isLoading={isLoading} />
             </div>
-          </div>
-        )}
 
-        {error && (
-          <div className="error-state">
-            <h3>Search Error</h3>
-            <p>{error}</p>
-          </div>
-        )}
-
-        {!isLoading && !error && hasSearched && (
-          <div className="results-container">
-            {searchStats && (
-              <div className="stats">
-                <div className="stat-item">
-                  <span>Results:</span>
-                  <span className="stat-value">{searchStats.total.toLocaleString()}</span>
-                </div>
-                <div className="stat-item">
-                  <span>Query:</span>
-                  <span className="stat-value">"{searchStats.query}"</span>
+            {isLoading && (
+              <div className="loading-container">
+                <div>
+                  <div className="galaxy-loader"></div>
+                  <p className="loader-text">Searching the galaxy...</p>
                 </div>
               </div>
             )}
 
-            {results.length > 0 ? (
-              <div className="results-list">
-                {results.map((result, idx) => (
-                  <div 
-                    key={result.docId || idx} 
-                    className="result-item"
-                    style={{ animationDelay: `${idx * 0.05}s` }}
-                  >
-                    <div className="result-header">
-                      <span className="result-doc-id">Document #{result.docId}</span>
-                      <div className="result-score">
-                        <span>Score:</span>
-                        <span className="score-badge">{result.score}</span>
-                      </div>
-                    </div>
-                    {result.url && (
-                      <a 
-                        href={result.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="result-url"
-                      >
-                        {result.url}
-                      </a>
-                    )}
-                  </div>
-                ))}
+            {error && (
+              <div className="error-state">
+                <h3>Search Error</h3>
+                <p>{error}</p>
               </div>
-            ) : hasSearched && !isLoading ? (
+            )}
+
+            {!isLoading && !error && hasSearched && results.length > 0 && (
+              <SearchResults 
+                results={results} 
+                query={searchStats?.query}
+                currentPage={currentPage}
+                onPageChange={setCurrentPage}
+                totalResults={searchStats?.total || results.length}
+              />
+            )}
+
+            {!isLoading && !error && hasSearched && results.length === 0 && (
               <div className="empty-state">
                 <div className="empty-state-icon">🔍</div>
                 <h3>No results found</h3>
                 <p>Try a different search query</p>
               </div>
-            ) : null}
-          </div>
-        )}
+            )}
 
-        {!hasSearched && !isLoading && (
-          <div className="empty-state">
-            <div className="empty-state-icon">✨</div>
-            <h3>Start Your Search</h3>
-            <p>Enter a query above to explore the galaxy of documents</p>
+            {!hasSearched && !isLoading && (
+              <div className="empty-state">
+                <div className="empty-state-icon">✨</div>
+                <h3>Start Your Search</h3>
+                <p>Enter a query above to explore the galaxy of documents</p>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="upload-container">
+            <PDFUpload onUpload={handleFileUpload} />
           </div>
         )}
       </div>

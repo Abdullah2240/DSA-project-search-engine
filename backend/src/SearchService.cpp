@@ -5,27 +5,28 @@
 #include <cctype>
 #include <cmath>
 #include <sstream>
+#include <thread>
+#include <mutex>
+#include <future>
 
 struct SearchResult {
     int doc_id;
     std::string url;
-    double score;  // Changed to double for advanced scoring
-    int publication_year;  // For secondary sorting
-    int cited_by_count;   // For tertiary sorting
+    double score;
+    int publication_year;
+    int cited_by_count;
 };
 
-// Sort by: 1) Final score (desc), 2) Publication year (desc - recent first), 3) Citations (desc)
 bool compareResults(const SearchResult& a, const SearchResult& b) {
-    if (std::abs(a.score - b.score) > 0.001) {  // Score differs significantly
+    if (std::abs(a.score - b.score) > 1e-6) {
         return a.score > b.score;
     }
     if (a.publication_year != b.publication_year) {
-        return a.publication_year > b.publication_year;  // Recent first
+        return a.publication_year > b.publication_year;
     }
-    return a.cited_by_count > b.cited_by_count;  // More citations first
+    return a.cited_by_count > b.cited_by_count;
 }
 
-//Split query into words
 std::vector<std::string> split_query(const std::string& str) {
     std::vector<std::string> words;
     std::stringstream ss(str);
@@ -38,16 +39,22 @@ std::vector<std::string> split_query(const std::string& str) {
 
 SearchService::SearchService() {
     std::cout << "[Engine] Initializing Search Service...\n";
-    // Load lexicon with trie (trie is built automatically on load)
+    
+    // Load lexicon with trie
     if (!lexicon_trie_.load_from_json("data/processed/lexicon.json")) {
         std::cerr << "[Engine] CRITICAL: Could not load lexicon.json\n";
     } else {
         std::cout << "[Engine] Lexicon loaded: " << lexicon_trie_.size() << " words\n";
         std::cout << "[Engine] Trie built and ready for autocomplete\n";
     }
+    
+    // Load URL mapper
     if (!doc_url_mapper.load("data/processed/docid_to_url.json")) {
         std::cerr << "[Engine] WARNING: Could not load doc_url_map.json\n";
     }
+    
+    // Pre-allocate barrel cache (100 barrels max)
+    barrel_cache_.reserve(100);
     
     // Load document metadata for ranking
     if (!document_metadata_.load("data/processed/document_metadata.json")) {
@@ -57,54 +64,99 @@ SearchService::SearchService() {
         std::cout << "[Engine] Document metadata loaded: " << document_metadata_.size() << " documents\n";
     }
     
-    // build map instead of loading full forward index
-    build_offset_map();
+    // NEW: Load all document stats into memory for O(1) lookup
+    load_document_stats();
 
-    //load delta index
+    // Load delta index
     load_delta_index();
+
+    std::string doc_vectors_path = "data/processed/document_vectors.bin";
+    std::string word_embeddings_path = "data/processed/word_embeddings.bin";
+    
+    semantic_search_enabled_ = semantic_scorer_.load_document_vectors(doc_vectors_path) && semantic_scorer_.load_word_embeddings(word_embeddings_path);
+    if(semantic_search_enabled_) {
+        std::cout << "[Engine] Semantic Search Ready!";
+    }
+    std::cout << "[Engine] Search Service ready!\n";
+
 }
 
-// Map builder for forward index offsets
-void SearchService::build_offset_map() {
-    std::cout << "[Engine] Building Forward Index Offset Map...\n";
-    // NOTE: We are now reading the .jsonl file!
-    std::ifstream f("data/processed/forward_index.jsonl"); 
+// NEW: Load all document lengths and title frequencies into RAM
+void SearchService::load_document_stats() {
+    std::cout << "[Engine] Loading document statistics into memory...\n";
+    
+    std::ifstream f("data/processed/forward_index.jsonl");
     if (!f.is_open()) {
         std::cerr << "[Engine] WARNING: Could not open forward_index.jsonl\n";
         return;
     }
 
     std::string line;
-    std::streampos current_offset = 0; 
+    line.reserve(4096); // Pre-allocate typical line size
+    int docs_loaded = 0;
+    
+    // Reserve space for expected document count
+    doc_stats_cache_.reserve(50000);
 
     while (std::getline(f, line)) {
-        if (line.empty()) {
-            current_offset = f.tellg(); 
-            continue;
-        }
+        if (line.empty()) continue;
 
         try {
-            // Parse ONLY the ID to save RAM
-            size_t id_pos = line.find("\"doc_id\"");
-            if (id_pos != std::string::npos) {
-                size_t start_quote = line.find("\"", id_pos + 9);
-                size_t end_quote = line.find("\"", start_quote + 1);
-                std::string id_str = line.substr(start_quote + 1, end_quote - start_quote - 1);
-                int doc_id = std::stoi(id_str);
-                
-                doc_offsets_[doc_id] = current_offset;
+            json doc_line = json::parse(line);
+            
+            if (!doc_line.contains("doc_id") || !doc_line.contains("data")) {
+                continue;
             }
-        } catch (...) {}
-        
-        current_offset = f.tellg(); 
+
+            int doc_id = std::stoi(doc_line["doc_id"].get<std::string>());
+            json& data = doc_line["data"];
+
+            DocStats stats;
+            
+            // Load document length
+            stats.doc_length = data.value("doc_length", 0);
+
+            // Load title frequencies for all words in this document (sparse storage)
+            if (data.contains("words")) {
+                for (auto& word_item : data["words"].items()) {
+                    int word_id = std::stoi(word_item.key());
+                    json& word_stats = word_item.value();
+                    
+                    if (word_stats.contains("title_frequency")) {
+                        int title_freq = word_stats["title_frequency"].get<int>();
+                        if (title_freq > 0 && title_freq <= 255) {
+                            stats.title_frequencies[word_id] = static_cast<uint8_t>(title_freq);
+                        }
+                    }
+                }
+            }
+
+            doc_stats_cache_[doc_id] = std::move(stats);
+            docs_loaded++;
+
+            if (docs_loaded % 10000 == 0) {
+                std::cout << "[Engine] Loaded stats for " << docs_loaded << " documents...\n";
+            }
+
+        } catch (const std::exception&) {
+            // Skip malformed lines
+            continue;
+        }
     }
-    std::cout << "[Engine] Mapped " << doc_offsets_.size() << " documents.\n";
+
+    std::cout << "[Engine] Document stats loaded: " << doc_stats_cache_.size() << " documents in memory\n";
+    
+    // Calculate approximate memory usage
+    size_t estimated_mem = doc_stats_cache_.size() * (sizeof(int) + sizeof(DocStats) + 50); // ~100 bytes per doc
+    std::cout << "[Engine] Estimated memory usage: " << (estimated_mem / 1024 / 1024) << " MB\n";
 }
 
-// delta index loader
 void SearchService::load_delta_index() {
     std::ifstream f("data/processed/barrels/inverted_delta.json");
-    if (!f.good()) return; 
+    if (!f.good()) {
+        std::cout << "[Engine] No delta index found (this is normal for fresh builds)\n";
+        return;
+    }
 
     try {
         json j;
@@ -114,70 +166,73 @@ void SearchService::load_delta_index() {
             std::vector<DeltaEntry> entries;
             for (auto& elem : item.value()) {
                 entries.push_back({
-                    elem[0].get<int>(), // doc_id
-                    elem[1].get<int>(), // freq
-                    elem[2].get<std::vector<int>>() // positions
+                    elem[0].get<int>(),
+                    elem[1].get<int>(),
+                    elem[2].get<std::vector<int>>()
                 });
             }
-            delta_index_[word_id] = entries;
+            delta_index_[word_id] = std::move(entries);
         }
-        std::cout << "[Engine] Delta Index loaded for dynamic content.\n";
-    } catch (...) {}
-}
-
-// disk fetcher for forward index
-json SearchService::get_document_from_disk(int doc_id) {
-    if (doc_offsets_.find(doc_id) == doc_offsets_.end()) return nullptr;
-
-    std::ifstream f("data/processed/forward_index.jsonl");
-    f.seekg(doc_offsets_[doc_id]); 
-
-    std::string line;
-    if (std::getline(f, line)) {
-        try {
-            return json::parse(line);
-        } catch (...) {}
+        std::cout << "[Engine] Delta Index loaded: " << delta_index_.size() << " words\n";
+    } catch (const std::exception& e) {
+        std::cerr << "[Engine] Error loading delta index: " << e.what() << "\n";
     }
-    return nullptr;
 }
 
+// Barrel cache with LRU eviction
 json& SearchService::get_barrel(int barrel_id) {
-    if (barrel_cache_.find(barrel_id) == barrel_cache_.end()) {
-        std::string path = "data/processed/barrels/inverted_barrel_" + std::to_string(barrel_id) + ".json";
-        std::ifstream f(path);
-        json j;
-        if (f.is_open()) {
-            f >> j;
-            barrel_cache_[barrel_id] = j;
-        } else {
-            // Prevent crash if file missing
-            barrel_cache_[barrel_id] = json::object();
-        }
+    // Check if already in cache
+    auto it = barrel_cache_.find(barrel_id);
+    if (it != barrel_cache_.end()) {
+        return it->second;
     }
+    
+    // Limit cache size to prevent memory overflow (max 30 barrels in memory)
+    // 30 barrels * ~5MB each = ~150MB max
+    if (barrel_cache_.size() >= 30) {
+        // Simple eviction: clear oldest half
+        auto erase_it = barrel_cache_.begin();
+        std::advance(erase_it, 15);
+        barrel_cache_.erase(barrel_cache_.begin(), erase_it);
+    }
+    
+    std::string path = "data/processed/barrels/inverted_barrel_" + std::to_string(barrel_id) + ".json";
+    std::ifstream f(path);
+    
+    if (f.is_open()) {
+        json j;
+        f >> j;
+        barrel_cache_[barrel_id] = std::move(j);
+    } else {
+        std::cerr << "[Engine] WARNING: Could not load barrel " << barrel_id << "\n";
+        barrel_cache_[barrel_id] = json::object();
+    }
+    
     return barrel_cache_[barrel_id];
 }
 
+// Fast O(1) memory lookup for title frequency
 int SearchService::get_title_frequency(int doc_id, int word_id) {
-    json doc = get_document_from_disk(doc_id);
-    if (doc == nullptr) return 0;
+    auto doc_it = doc_stats_cache_.find(doc_id);
+    if (doc_it == doc_stats_cache_.end()) {
+        return 0;
+    }
     
-    try {
-        std::string word_id_str = std::to_string(word_id);
-        if (doc["data"]["words"].contains(word_id_str)) {
-            return doc["data"]["words"][word_id_str]["title_frequency"].get<int>();
-        }
-    } catch (...) {}
-    return 0;
+    auto word_it = doc_it->second.title_frequencies.find(word_id);
+    if (word_it == doc_it->second.title_frequencies.end()) {
+        return 0;
+    }
+    
+    return static_cast<int>(word_it->second);
 }
 
+// Fast O(1) memory lookup for document length
 int SearchService::get_document_length(int doc_id) {
-    json doc = get_document_from_disk(doc_id);
-    if (doc == nullptr) return 0;
-    
-    try {
-        return doc["data"]["doc_length"].get<int>();
-    } catch (...) {}
-    return 0;
+    auto it = doc_stats_cache_.find(doc_id);
+    if (it == doc_stats_cache_.end()) {
+        return 0;
+    }
+    return it->second.doc_length;
 }
 
 std::string SearchService::search(std::string query) {
@@ -187,6 +242,7 @@ std::string SearchService::search(std::string query) {
 
     // 1. Clean and Split Query
     std::string clean_query_str;
+    clean_query_str.reserve(query.size());
     for(char c : query) {
         if(std::isalnum(static_cast<unsigned char>(c))) {
             clean_query_str += std::tolower(static_cast<unsigned char>(c));
@@ -198,15 +254,17 @@ std::string SearchService::search(std::string query) {
     std::vector<std::string> query_words = split_query(clean_query_str);
     if (query_words.empty()) return response_json.dump();
 
-    // Score accumulation maps
+    // Pre-allocate with estimated size
     std::unordered_map<int, double> doc_scores;
+    doc_scores.reserve(2000);
     std::unordered_map<int, int> doc_match_count;
+    doc_match_count.reserve(2000);
     std::unordered_map<int, std::map<int, std::vector<int>>> doc_positions_map;
 
     int valid_query_words = 0;
 
-    // 2. Iterate Words
-    for (int i = 0; i < query_words.size(); ++i) {
+    // 2. Process query words (sequential is faster for small queries due to overhead)
+    for (size_t i = 0; i < query_words.size(); ++i) {
         std::string word = query_words[i];
         int word_id = lexicon_trie_.get_word_index(word);
 
@@ -214,46 +272,42 @@ std::string SearchService::search(std::string query) {
             valid_query_words++;
             std::string id_str = std::to_string(word_id);
             
-            // A. Retrieve Main Barrel Data
             int barrel_id = word_id % 100;
             json& barrel = get_barrel(barrel_id);
             
-            // Temporary list to hold entries from both Barrel AND Delta
             std::vector<DeltaEntry> combined_entries;
+            combined_entries.reserve(500);
 
-            // Load from Disk Barrel
+            // Combine main index and delta index
             if (barrel.contains(id_str)) {
-                auto raw = barrel[id_str];
+                auto& raw = barrel[id_str];
+                combined_entries.reserve(raw.size());
                 for (auto& entry : raw) {
-                    if (entry.size() < 3) continue;
-                    combined_entries.push_back({
-                        entry[0].get<int>(), // doc_id
-                        entry[1].get<int>(), // freq
-                        entry[2].get<std::vector<int>>() // pos
-                    });
+                    if (entry.size() >= 3) {
+                        combined_entries.push_back({
+                            entry[0].get<int>(),
+                            entry[1].get<int>(),
+                            entry[2].get<std::vector<int>>()
+                        });
+                    }
                 }
             }
 
-            // B. Retrieve Delta Index Data (Dynamic Content)
             if (delta_index_.count(word_id)) {
                 const auto& deltas = delta_index_[word_id];
                 combined_entries.insert(combined_entries.end(), deltas.begin(), deltas.end());
             }
 
-            // C. Process Combined Entries
+            // Process entries
             for (auto& entry : combined_entries) {
                 int doc_id = entry.doc_id;
                 int weighted_freq = entry.frequency;
-                std::vector<int> positions = entry.positions;
+                const std::vector<int>& positions = entry.positions;
 
-                // Optimization: Don't fetch doc_len/title_freq yet to save I/O
-                // Use default values for initial filtering or fetch if strictly needed.
-                // For accuracy, we fetch them now.
-                
+                // OPTIMIZED: Memory lookups instead of disk I/O
                 int title_freq = get_title_frequency(doc_id, word_id);
                 int doc_len = get_document_length(doc_id);
 
-                // Calculate advanced score using Teammate's Scorer
                 ScoreComponents scores = ranking_scorer_.calculate_score(
                     weighted_freq,
                     title_freq,
@@ -265,23 +319,24 @@ std::string SearchService::search(std::string query) {
 
                 doc_scores[doc_id] += scores.final_score;
                 doc_match_count[doc_id]++;
-                doc_positions_map[doc_id][i] = positions;
+                doc_positions_map[doc_id][static_cast<int>(i)] = positions;
             }
         }
     }
 
     if (valid_query_words == 0) return response_json.dump();
 
-    // 3. Filter Intersection (AND Logic) and Apply Proximity
+    // 3. Filter and Apply Proximity
     std::vector<SearchResult> final_results;
+    final_results.reserve(std::min(static_cast<size_t>(500), doc_match_count.size()));
 
-    for (auto const& [doc_id, count] : doc_match_count) {
-        // Strict AND logic: Doc must contain ALL valid query words
+    for (const auto& [doc_id, count] : doc_match_count) {
+        // Only include documents that match ALL query words
         if (count == valid_query_words) {
             double final_score = doc_scores[doc_id];
 
-            // Proximity bonus
-            for (int k = 0; k < query_words.size() - 1; ++k) {
+            // Proximity bonus for adjacent words
+            for (int k = 0; k < static_cast<int>(query_words.size()) - 1; ++k) {
                 if (doc_positions_map[doc_id].count(k) && doc_positions_map[doc_id].count(k + 1)) {
                     const auto& posA = doc_positions_map[doc_id][k];
                     const auto& posB = doc_positions_map[doc_id][k + 1];
@@ -289,15 +344,17 @@ std::string SearchService::search(std::string query) {
                     bool found_adjacent = false;
                     for (int a : posA) {
                         for (int b : posB) {
-                            if (b == a + 1) { found_adjacent = true; break; }
+                            if (b == a + 1) {
+                                found_adjacent = true;
+                                break;
+                            }
                         }
                         if (found_adjacent) break;
                     }
-                    if (found_adjacent) final_score += 100.0; 
+                    if (found_adjacent) final_score += 100.0;
                 }
             }
 
-            // Get Metadata
             std::string url = doc_url_mapper.get(doc_id);
             int pub_year = document_metadata_.get_publication_year(doc_id);
             int citations = document_metadata_.get_cited_by_count(doc_id);
@@ -306,24 +363,59 @@ std::string SearchService::search(std::string query) {
         }
     }
 
-    // 4. Sort
-    std::sort(final_results.begin(), final_results.end(), compareResults);
+    // After final_results is populated with initial search results
 
-    // 5. Build JSON
-    for (const auto& res : final_results) {
-        json item;
-        item["docId"] = res.doc_id;
-        item["score"] = res.score;
-        item["url"] = res.url;
-        
-        if (res.publication_year > 0) item["publication_year"] = res.publication_year;
-        if (res.cited_by_count > 0) item["cited_by_count"] = res.cited_by_count;
-        
-        response_json["results"].push_back(item);
-        if (response_json["results"].size() >= 50) break;
+// 4. Apply semantic scoring if available
+if (semantic_search_enabled_ && !final_results.empty()) {
+    std::cout << "[Engine] Computing semantic scores for " << final_results.size() << " documents\n";
+    
+    // Get semantic scores for all results
+    std::vector<double> semantic_scores;
+    semantic_scores.reserve(final_results.size());
+    
+    for (const auto& result : final_results) {
+        double sem_score = semantic_scorer_.compute_similarity(result.doc_id, query_words);
+        semantic_scores.push_back(sem_score);
     }
-        
-    return response_json.dump();
+    
+    // Find min and max for normalization
+    auto [min_it, max_it] = std::minmax_element(semantic_scores.begin(), semantic_scores.end());
+    double min_score = *min_it;
+    double max_score = *max_it;
+    double range = max_score - min_score;
+    
+    if (range > 0) {
+        // Update scores with 60% lexical + 40% semantic
+        for (size_t i = 0; i < final_results.size(); i++) {
+            double normalized_semantic = (semantic_scores[i] - min_score) / range;
+            final_results[i].score = 0.6 * final_results[i].score + 0.4 * normalized_semantic;
+        }
+    }
+}
+
+// 4. Partial sort for top 50 (faster than full sort)
+if (final_results.size() > 50) {
+    std::partial_sort(final_results.begin(), final_results.begin() + 50, 
+                     final_results.end(), compareResults);
+    final_results.resize(50);
+} else {
+    std::sort(final_results.begin(), final_results.end(), compareResults);
+}
+
+// 5. Build JSON response
+for (const auto& res : final_results) {
+    json item;
+    item["docId"] = res.doc_id;
+    item["score"] = res.score;
+    item["url"] = res.url;
+    
+    if (res.publication_year > 0) item["publication_year"] = res.publication_year;
+    if (res.cited_by_count > 0) item["cited_by_count"] = res.cited_by_count;
+    
+    response_json["results"].push_back(item);
+}
+    
+return response_json.dump();
 }
 
 std::string SearchService::autocomplete(const std::string& prefix, int limit) {
@@ -335,15 +427,14 @@ std::string SearchService::autocomplete(const std::string& prefix, int limit) {
         return response_json.dump();
     }
     
-    // Clean the prefix (lowercase, remove extra spaces)
     std::string clean_prefix;
+    clean_prefix.reserve(prefix.size());
     for (char c : prefix) {
         if (!std::isspace(c)) {
             clean_prefix += std::tolower(static_cast<unsigned char>(c));
         }
     }
     
-    // Get autocomplete suggestions from trie
     std::vector<std::string> suggestions = lexicon_trie_.autocomplete(clean_prefix, limit);
     
     for (const auto& suggestion : suggestions) {

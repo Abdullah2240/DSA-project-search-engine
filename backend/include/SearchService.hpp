@@ -9,7 +9,7 @@
 #include "doc_url_mapper.hpp"
 #include "DocumentMetadata.hpp"
 #include "RankingScorer.hpp"
-#include "json.hpp"
+#include "SemanticScorer.hpp"
 
 using json = nlohmann::json;
 
@@ -18,6 +18,12 @@ struct DeltaEntry {
     int doc_id;
     int frequency;
     std::vector<int> positions;
+};
+
+// In-memory document stats for fast lookup
+struct DocStats {
+    int doc_length;
+    std::unordered_map<int, int> title_frequencies; // word_id -> title_freq
 };
 
 class SearchService {
@@ -36,21 +42,26 @@ private:
     DocumentMetadata document_metadata_;
     RankingScorer ranking_scorer_;
     std::unordered_map<int, json> barrel_cache_;
-    // RAM OPTIMIZATION: Maps DocID -> Byte Position in forward_index.jsonl
-    std::unordered_map<int, std::streampos> doc_offsets_; 
+    
+    // In-memory document statistics for O(1) lookup
+    std::unordered_map<int, DocStats> doc_stats_cache_;
 
     // DYNAMIC SEARCH: Holds the small "new" index in RAM
     std::unordered_map<int, std::vector<DeltaEntry>> delta_index_;
+    
+    // Semantic search components
+    bool semantic_search_enabled_;
+    SemanticScorer semantic_scorer_;
 
     // Helpers
     json& get_barrel(int barrel_id);
     
-    // Replaces load_forward_index
-    void build_offset_map();
+    // Load all document stats into memory
+    void load_document_stats();
+    
     void load_delta_index();
-    json get_document_from_disk(int doc_id);
-
-    // Updated getters to use disk seek
+    
+    // Fast memory-based lookups (replacing disk I/O)
     int get_title_frequency(int doc_id, int word_id);
     int get_document_length(int doc_id);
 };

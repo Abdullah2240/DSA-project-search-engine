@@ -11,6 +11,7 @@ __pycache__/
 env/
 venv/
 .venv/
+backend/venv/
 
 # Distribution / packaging
 build/
@@ -44,14 +45,20 @@ dist/
 
 # Build artifacts
 /build/
+backend/build/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+*.ninja
+.ninja_deps
+.ninja_log
 
 # Compiled binaries
 *.exe
 *.obj
+*.bin
+*.out
 
 # ============================
 #      NODE / REACT FRONTEND
@@ -66,14 +73,77 @@ yarn-error.log*
 # Build output
 dist/
 build/
+frontend/dist/
+frontend/build/
+
+# ============================
+#      DATA FILES
+# ============================
+
+# Raw data (PDFs, downloads)
+backend/data/raw/
+backend/data/temp_pdfs/*
+!backend/data/temp_pdfs/.gitkeep
+*.pdf
+*.part
+
+# Processed data (indices, vectors)
+backend/data/processed/barrels/*
+!backend/data/processed/barrels/.gitkeep
+backend/data/processed/*.bin
+backend/data/processed/*.jsonl
+backend/data/processed/*.json
+!backend/data/processed/.gitkeep
+
+# GloVe embeddings
+glove.6B.300d.txt
+*.glove
+word_embeddings.bin
+document_vectors.bin
+
+# Index files
+lexicon.json
+forward_index.jsonl
+inverted_index.bin
+docid_to_url.json
+document_metadata.json
+
+# Test data
+test_raw.jsonl
+test.jsonl
+test_raw_renumbered.jsonl
+
+# ============================
+#   ENVIRONMENT & SECRETS
+# ============================
+
+venv/
 
 # Environment variables
 *.env
 *.env.local
+.env
 .env.local
 .env.development.local
 .env.production.local
 .env.test.local
+
+# Private keys
+*.pem
+*.key
+*.cert
+
+# ============================
+#      STATIC BUILD
+# ============================
+
+# Frontend static build (served by backend)
+backend/static/assets/
+backend/static/*.html
+backend/static/*.js
+backend/static/*.css
+backend/static/vite.svg
+!backend/static/.gitkeep
 
 # ============================
 #          GENERAL
@@ -82,14 +152,37 @@ build/
 # OS generated files
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # IDEs / Editors
 .vscode/
+!.vscode/extensions.json
 .idea/
 *.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
 
 # Cache
 .cache/
+*.cache
 
-#Ignore data so it does not get uploaded to github
-backend/data/raw/
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Coverage reports
+coverage/
+*.coverage
+htmlcov/
+.pytest_cache/
+
+# Package files
+*.tar.gz
+*.zip
+*.7z
+*.rar
