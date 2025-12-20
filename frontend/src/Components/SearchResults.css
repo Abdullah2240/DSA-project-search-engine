@@ -60,6 +60,11 @@
   text-decoration: none;
   transition: color 0.2s ease;
   font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .result-title:hover {

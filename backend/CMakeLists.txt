@@ -56,6 +56,9 @@ add_executable(search_engine
     src/DocumentMetadata.cpp
     src/RankingScorer.cpp
     src/SemanticScorer.cpp
+    src/forward_index.cpp
+    src/inverted_index.cpp
+    src/PDFProcessor.cpp
 )
 target_link_libraries(search_engine doc_url_mapper)
 

@@ -156,10 +156,14 @@ void InvertedIndexBuilder::update_delta_barrel(int doc_id, const std::map<int, W
     for (const auto& [word_id, stats] : doc_stats) {
         std::string w_id_str = std::to_string(word_id);
         
+        // Merge title and body positions
+        std::vector<int> all_positions = stats.title_positions;
+        all_positions.insert(all_positions.end(), stats.body_positions.begin(), stats.body_positions.end());
+        
         json entry = json::array({
             doc_id,
             stats.get_weighted_frequency(),
-            stats.title_positions // merging positions logic if needed
+            all_positions
         });
 
         if (delta_json.contains(w_id_str)) {

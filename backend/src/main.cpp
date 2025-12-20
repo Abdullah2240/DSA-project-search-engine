@@ -1,10 +1,34 @@
 #include "httplib.h" 
 #include "SearchService.hpp"
+#include "PDFProcessor.hpp"
+#include "lexicon.hpp"
+#include "forward_index.hpp"
+#include "inverted_index.hpp"
+#include "DocumentMetadata.hpp"
+#include "doc_url_mapper.hpp"
 #include <iostream>
 #include <fstream>
 
 int main() {
     SearchService engine;
+    
+    // Initialize components for PDF processing
+    Lexicon lexicon;
+    lexicon.load_from_json("data/processed/lexicon.json");
+    
+    ForwardIndexBuilder forward_builder;
+    forward_builder.load_lexicon("data/processed/lexicon.json");
+    
+    InvertedIndexBuilder inverted_builder(100);
+    
+    DocumentMetadata metadata;
+    metadata.load("data/processed/document_metadata.json");
+    
+    DocURLMapper url_mapper;
+    url_mapper.load("data/processed/docid_to_url.json");
+    
+    PDFProcessor pdf_processor(lexicon, forward_builder, inverted_builder, metadata, url_mapper);
+    
     httplib::Server svr;
 
     // CORS middleware - Add CORS headers to all responses
@@ -108,7 +132,7 @@ int main() {
     });
 
     // Define Route: /upload - Handle PDF uploads (saves to temp_pdfs for later processing)
-    svr.Post("/upload", [&engine](const httplib::Request& req, httplib::Response& res) {
+    svr.Post("/upload", [&engine, &pdf_processor](const httplib::Request& req, httplib::Response& res) {
         try {
             if (req.has_header("Content-Type")) {
                 std::string content_type = req.get_header_value("Content-Type");
@@ -116,6 +140,7 @@ int main() {
                 if (content_type.find("multipart/form-data") != std::string::npos) {
                     int uploaded_count = 0;
                     int failed_count = 0;
+                    std::vector<int> new_doc_ids;
                     
                     // Process uploaded files from multipart form
                     if (req.form.has_file("files")) {
@@ -131,8 +156,18 @@ int main() {
                             if (out.is_open()) {
                                 out.write(content.data(), content.size());
                                 out.close();
-                                uploaded_count++;
                                 std::cout << "[Upload] Saved: " << filename << std::endl;
+                                
+                                // Process and index immediately
+                                int doc_id = -1;
+                                if (pdf_processor.process_and_index(temp_path, doc_id)) {
+                                    uploaded_count++;
+                                    new_doc_ids.push_back(doc_id);
+                                    std::cout << "[Upload] ✅ Indexed doc_id " << doc_id << std::endl;
+                                } else {
+                                    failed_count++;
+                                    std::cerr << "[Upload] ❌ Failed to index: " << filename << std::endl;
+                                }
                             } else {
                                 failed_count++;
                                 std::cerr << "[Upload] Failed to save: " << filename << std::endl;
@@ -140,10 +175,27 @@ int main() {
                         }
                     }
                     
+                    // Reload indices in SearchService
+                    if (uploaded_count > 0) {
+                        std::cout << "[Upload] Reloading search engine indices..." << std::endl;
+                        engine.reload_delta_index();
+                        engine.reload_metadata();
+                    }
+                    
                     std::string response = "{\"success\": true, \"uploadedCount\": " + 
                                           std::to_string(uploaded_count) + 
                                           ", \"failedCount\": " + std::to_string(failed_count) + 
-                                          ", \"message\": \"PDFs saved to temp_pdfs. Run the data pipeline to index them.\"}";
+                                          ", \"newDocIds\": [";
+                    for (size_t i = 0; i < new_doc_ids.size(); ++i) {
+                        response += std::to_string(new_doc_ids[i]);
+                        if (i < new_doc_ids.size() - 1) response += ", ";
+                    }
+                    response += "], \"message\": \"";
+                    if (uploaded_count > 0) {
+                        response += "PDFs uploaded and indexed successfully! They are now searchable.\"}";
+                    } else {
+                        response += "Upload completed but no PDFs were processed.\"}";
+                    }
                     res.set_content(response, "application/json");
                 } else {
                     res.status = 400;

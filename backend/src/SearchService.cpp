@@ -409,6 +409,14 @@ for (const auto& res : final_results) {
     item["score"] = res.score;
     item["url"] = res.url;
     
+    // Add title from metadata
+    const DocMetadata* meta = document_metadata_.get_metadata(res.doc_id);
+    if (meta && !meta->title.empty()) {
+        item["title"] = meta->title;
+    } else {
+        item["title"] = "Document #" + std::to_string(res.doc_id);
+    }
+    
     if (res.publication_year > 0) item["publication_year"] = res.publication_year;
     if (res.cited_by_count > 0) item["cited_by_count"] = res.cited_by_count;
     
@@ -442,4 +450,17 @@ std::string SearchService::autocomplete(const std::string& prefix, int limit) {
     }
     
     return response_json.dump();
+}
+
+void SearchService::reload_delta_index() {
+    std::cout << "[Engine] Reloading delta index..." << std::endl;
+    delta_index_.clear();
+    load_delta_index();
+    std::cout << "[Engine] Delta index reloaded successfully" << std::endl;
+}
+
+void SearchService::reload_metadata() {
+    std::cout << "[Engine] Reloading metadata..." << std::endl;
+    document_metadata_.load("data/processed/document_metadata.json");
+    std::cout << "[Engine] Metadata reloaded: " << document_metadata_.size() << " documents" << std::endl;
 }

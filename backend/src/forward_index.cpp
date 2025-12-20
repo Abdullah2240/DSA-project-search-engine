@@ -193,6 +193,7 @@ void ForwardIndexBuilder::append_document(const std::string& output_path, int do
 
     // Build the JSON object for this one doc
     json words_obj;
+    int total_tokens = 0;
     for (const auto& [id, stats] : doc_stats) {
         words_obj[std::to_string(id)] = {
             {"title_frequency", stats.title_frequency},
@@ -201,10 +202,13 @@ void ForwardIndexBuilder::append_document(const std::string& output_path, int do
             {"title_positions", stats.title_positions},
             {"body_positions", stats.body_positions}
         };
+        total_tokens += stats.title_frequency + stats.body_frequency;
     }
 
     json doc_json;
-    doc_json["doc_length"] = 0;
+    doc_json["doc_length"] = total_tokens;
+    doc_json["title_length"] = 0;
+    doc_json["body_length"] = total_tokens;
     doc_json["words"] = words_obj;
 
     json line_obj;

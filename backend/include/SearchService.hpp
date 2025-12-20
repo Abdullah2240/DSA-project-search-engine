@@ -35,6 +35,10 @@ public:
     
     // Returns autocomplete suggestions as JSON string
     std::string autocomplete(const std::string& prefix, int limit = 10);
+    
+    // Reload indices after dynamic uploads
+    void reload_delta_index();
+    void reload_metadata();
 
 private:
     LexiconWithTrie lexicon_trie_;
