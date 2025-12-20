@@ -93,6 +93,7 @@ backend/data/processed/barrels/*
 backend/data/processed/*.bin
 backend/data/processed/*.jsonl
 backend/data/processed/*.json
+backend/data/processed/*.cursor
 !backend/data/processed/.gitkeep
 
 # GloVe embeddings
