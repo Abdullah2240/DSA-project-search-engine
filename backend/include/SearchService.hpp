@@ -63,6 +63,11 @@ private:
     // Load all document stats into memory
     void load_document_stats();
     
+    // Binary cache methods for fast loading
+    bool load_doc_stats_from_cache(const std::string& cache_path);
+    void build_doc_stats_cache(const std::string& cache_path);
+    bool is_cache_valid(const std::string& cache_path, const std::string& source_path);
+    
     void load_delta_index();
     
     // Fast memory-based lookups (replacing disk I/O)

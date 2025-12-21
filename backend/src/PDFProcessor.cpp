@@ -44,13 +44,89 @@ int PDFProcessor::get_next_doc_id() {
     return max_id + 1;
 }
 
+void PDFProcessor::cleanup_temp_files() {
+    // Clean up both old and new temp directories
+    std::vector<std::string> temp_dirs = {"data/temp_json", "data/temp_pdfs"};
+    
+    int cleaned = 0;
+    int migrated = 0;
+    
+    for (const auto& temp_dir : temp_dirs) {
+        if (!fs::exists(temp_dir)) continue;
+        
+        try {
+            for (const auto& entry : fs::directory_iterator(temp_dir)) {
+                if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+                
+                std::string filename = entry.path().filename().string();
+                
+                // Only clean temp_*.json files (not user data)
+                if (filename.find("temp_") != 0) continue;
+                
+                // Migration: Move from temp_pdfs to temp_json
+                if (temp_dir == "data/temp_pdfs") {
+                    std::string new_path = "data/temp_json/" + filename;
+                    
+                    // Create temp_json dir if needed
+                    if (!fs::exists("data/temp_json")) {
+                        fs::create_directories("data/temp_json");
+                    }
+                    
+                    // Only migrate recent files (< 1 hour old)
+                    auto ftime = fs::last_write_time(entry.path());
+                    auto now = fs::file_time_type::clock::now();
+                    auto age = std::chrono::duration_cast<std::chrono::hours>(now - ftime).count();
+                    
+                    if (age < 1) {
+                        try {
+                            fs::rename(entry.path(), new_path);
+                            migrated++;
+                        } catch (...) {
+                            fs::remove(entry.path()); // Remove if can't migrate
+                            cleaned++;
+                        }
+                    } else {
+                        fs::remove(entry.path()); // Delete old files
+                        cleaned++;
+                    }
+                } else {
+                    // Clean old temp files from temp_json (> 1 hour old)
+                    auto ftime = fs::last_write_time(entry.path());
+                    auto now = fs::file_time_type::clock::now();
+                    auto age = std::chrono::duration_cast<std::chrono::hours>(now - ftime).count();
+                    
+                    if (age > 1) {
+                        fs::remove(entry.path());
+                        cleaned++;
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[PDFProcessor] Warning: Error cleaning " << temp_dir << ": " << e.what() << "\n";
+        }
+    }
+    
+    if (migrated > 0) {
+        std::cout << "[PDFProcessor] Migrated " << migrated << " temp files to temp_json/\n";
+    }
+    if (cleaned > 0) {
+        std::cout << "[PDFProcessor] Cleaned up " << cleaned << " old temp files\n";
+    }
+}
+
 ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id) {
     ProcessedPDF result;
     result.doc_id = doc_id;
     result.success = false;
 
+    // Create dedicated temp directory for JSON files (separate from PDFs)
+    std::string temp_dir = "data/temp_json";
+    if (!fs::exists(temp_dir)) {
+        fs::create_directories(temp_dir);
+    }
+    
     // Create temp output file for Python script
-    std::string temp_json = "data/temp_pdfs/temp_" + std::to_string(doc_id) + ".json";
+    std::string temp_json = temp_dir + "/temp_" + std::to_string(doc_id) + ".json";
     
     // Call Python tokenizer (use py -3.14 for Python 3.14)
     std::string python_cmd = "py -3.14 scripts/tokenize_single_pdf.py \"" 
@@ -63,6 +139,7 @@ ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id)
     
     if (ret != 0) {
         result.error = "Python tokenizer failed";
+        fs::remove(temp_json); // Clean up even on failure
         return result;
     }
 
@@ -70,18 +147,21 @@ ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id)
     std::ifstream f(temp_json);
     if (!f.is_open()) {
         result.error = "Could not read tokenized output";
+        fs::remove(temp_json); // Clean up
         return result;
     }
 
     try {
         json j;
         f >> j;
+        f.close(); // Close before deleting
         
         result.title = j.value("title", "Untitled");
         result.tokens = j.value("body_tokens", std::vector<std::string>());
         
         if (result.tokens.empty()) {
             result.error = "No tokens extracted from PDF";
+            fs::remove(temp_json); // Clean up
             return result;
         }
         
@@ -92,6 +172,7 @@ ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id)
         
     } catch (const std::exception& e) {
         result.error = std::string("JSON parse error: ") + e.what();
+        fs::remove(temp_json); // Clean up on error
         return result;
     }
 
@@ -116,6 +197,37 @@ std::map<int, WordStats> PDFProcessor::build_doc_stats(const std::vector<std::st
     }
     
     return doc_stats;
+}
+
+void PDFProcessor::check_and_merge_delta() {
+    // Check delta barrel size
+    std::ifstream f("data/processed/barrels/inverted_delta.json");
+    if (!f.good()) return;
+    
+    try {
+        json delta;
+        f >> delta;
+        
+        // Count total documents in delta barrel
+        int total_docs = 0;
+        for (auto& word_entry : delta.items()) {
+            if (word_entry.value().is_array()) {
+                total_docs += word_entry.value().size();
+            }
+        }
+        
+        // Merge if delta has 500+ document entries
+        if (total_docs >= 500) {
+            std::cout << "[PDFProcessor] ⚠️  Delta barrel has " << total_docs 
+                      << " entries. Merging to main barrels..." << std::endl;
+            
+            inverted_builder_.merge_delta_to_main("data/processed/barrels");
+            
+            std::cout << "[PDFProcessor] ✅ Delta barrel merged and cleared!" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[PDFProcessor] Warning: Could not check delta size: " << e.what() << "\n";
+    }
 }
 
 bool PDFProcessor::process_and_index(const std::string& pdf_path, int& assigned_doc_id) {
@@ -178,6 +290,9 @@ bool PDFProcessor::process_and_index(const std::string& pdf_path, int& assigned_
         outfile << doc_json.dump(-1) << "\n";
         std::cout << "[PDFProcessor] Added to test.jsonl" << std::endl;
     }
+    
+    // 10. Check if delta barrel needs merging
+    check_and_merge_delta();
     
     std::cout << "[PDFProcessor] ✅ Document " << assigned_doc_id << " is now searchable!" << std::endl;
     return true;

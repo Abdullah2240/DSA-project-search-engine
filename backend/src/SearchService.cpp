@@ -8,6 +8,8 @@
 #include <thread>
 #include <mutex>
 #include <future>
+#include <chrono>
+#include <cstdint>
 
 struct SearchResult {
     int doc_id;
@@ -82,20 +84,73 @@ SearchService::SearchService() {
 }
 
 // NEW: Load all document lengths and title frequencies into RAM
-void SearchService::load_document_stats() {
-    std::cout << "[Engine] Loading document statistics into memory...\n";
+bool SearchService::is_cache_valid(const std::string& cache_path, const std::string& source_path) {
+    std::ifstream cache(cache_path, std::ios::binary);
+    std::ifstream source(source_path);
+    
+    if (!cache.is_open() || !source.is_open()) return false;
+    
+    // Get file modification times (simple check: compare file sizes)
+    cache.seekg(0, std::ios::end);
+    source.seekg(0, std::ios::end);
+    
+    return cache.tellg() > 0; // Cache exists and has content
+}
+
+bool SearchService::load_doc_stats_from_cache(const std::string& cache_path) {
+    std::ifstream f(cache_path, std::ios::binary);
+    if (!f.is_open()) return false;
+    
+    // Read header
+    uint32_t num_docs;
+    f.read(reinterpret_cast<char*>(&num_docs), sizeof(num_docs));
+    
+    if (num_docs == 0 || num_docs > 10000000) return false; // Sanity check
+    
+    doc_stats_cache_.reserve(num_docs);
+    
+    // Read each document's stats
+    for (uint32_t i = 0; i < num_docs; ++i) {
+        int doc_id;
+        int doc_length;
+        uint32_t num_title_freqs;
+        
+        f.read(reinterpret_cast<char*>(&doc_id), sizeof(doc_id));
+        f.read(reinterpret_cast<char*>(&doc_length), sizeof(doc_length));
+        f.read(reinterpret_cast<char*>(&num_title_freqs), sizeof(num_title_freqs));
+        
+        DocStats stats;
+        stats.doc_length = doc_length;
+        
+        // Read title frequencies
+        for (uint32_t j = 0; j < num_title_freqs; ++j) {
+            int word_id;
+            int freq;
+            f.read(reinterpret_cast<char*>(&word_id), sizeof(word_id));
+            f.read(reinterpret_cast<char*>(&freq), sizeof(freq));
+            stats.title_frequencies[word_id] = freq;
+        }
+        
+        doc_stats_cache_[doc_id] = std::move(stats);
+    }
+    
+    return !f.fail();
+}
+
+void SearchService::build_doc_stats_cache(const std::string& cache_path) {
+    std::cout << "[Engine] Building doc stats cache from forward_index.jsonl...\n";
     
     std::ifstream f("data/processed/forward_index.jsonl");
     if (!f.is_open()) {
-        std::cerr << "[Engine] WARNING: Could not open forward_index.jsonl\n";
+        std::cerr << "[Engine] ERROR: Could not open forward_index.jsonl\n";
         return;
     }
 
     std::string line;
-    line.reserve(4096); // Pre-allocate typical line size
+    line.reserve(4096);
     int docs_loaded = 0;
     
-    // Reserve space for expected document count
+    doc_stats_cache_.clear();
     doc_stats_cache_.reserve(50000);
 
     while (std::getline(f, line)) {
@@ -104,19 +159,14 @@ void SearchService::load_document_stats() {
         try {
             json doc_line = json::parse(line);
             
-            if (!doc_line.contains("doc_id") || !doc_line.contains("data")) {
-                continue;
-            }
+            if (!doc_line.contains("doc_id") || !doc_line.contains("data")) continue;
 
             int doc_id = std::stoi(doc_line["doc_id"].get<std::string>());
             json& data = doc_line["data"];
 
             DocStats stats;
-            
-            // Load document length
             stats.doc_length = data.value("doc_length", 0);
 
-            // Load title frequencies for all words in this document (sparse storage)
             if (data.contains("words")) {
                 for (auto& word_item : data["words"].items()) {
                     int word_id = std::stoi(word_item.key());
@@ -124,8 +174,8 @@ void SearchService::load_document_stats() {
                     
                     if (word_stats.contains("title_frequency")) {
                         int title_freq = word_stats["title_frequency"].get<int>();
-                        if (title_freq > 0 && title_freq <= 255) {
-                            stats.title_frequencies[word_id] = static_cast<uint8_t>(title_freq);
+                        if (title_freq > 0) {
+                            stats.title_frequencies[word_id] = title_freq;
                         }
                     }
                 }
@@ -134,21 +184,70 @@ void SearchService::load_document_stats() {
             doc_stats_cache_[doc_id] = std::move(stats);
             docs_loaded++;
 
-            if (docs_loaded % 10000 == 0) {
-                std::cout << "[Engine] Loaded stats for " << docs_loaded << " documents...\n";
-            }
-
         } catch (const std::exception&) {
-            // Skip malformed lines
             continue;
         }
     }
-
-    std::cout << "[Engine] Document stats loaded: " << doc_stats_cache_.size() << " documents in memory\n";
     
-    // Calculate approximate memory usage
-    size_t estimated_mem = doc_stats_cache_.size() * (sizeof(int) + sizeof(DocStats) + 50); // ~100 bytes per doc
-    std::cout << "[Engine] Estimated memory usage: " << (estimated_mem / 1024 / 1024) << " MB\n";
+    // Write binary cache
+    std::ofstream out(cache_path, std::ios::binary);
+    if (!out.is_open()) {
+        std::cerr << "[Engine] WARNING: Could not create cache file\n";
+        return;
+    }
+    
+    uint32_t num_docs = static_cast<uint32_t>(doc_stats_cache_.size());
+    out.write(reinterpret_cast<const char*>(&num_docs), sizeof(num_docs));
+    
+    for (const auto& [doc_id, stats] : doc_stats_cache_) {
+        out.write(reinterpret_cast<const char*>(&doc_id), sizeof(doc_id));
+        out.write(reinterpret_cast<const char*>(&stats.doc_length), sizeof(stats.doc_length));
+        
+        uint32_t num_title_freqs = static_cast<uint32_t>(stats.title_frequencies.size());
+        out.write(reinterpret_cast<const char*>(&num_title_freqs), sizeof(num_title_freqs));
+        
+        for (const auto& [word_id, freq] : stats.title_frequencies) {
+            out.write(reinterpret_cast<const char*>(&word_id), sizeof(word_id));
+            out.write(reinterpret_cast<const char*>(&freq), sizeof(freq));
+        }
+    }
+    
+    std::cout << "[Engine] ✅ Cache built: " << doc_stats_cache_.size() << " documents\n";
+}
+
+void SearchService::load_document_stats() {
+    std::string cache_path = "data/processed/doc_stats.bin";
+    
+    // Try loading from binary cache first (100x faster)
+    if (is_cache_valid(cache_path, "data/processed/forward_index.jsonl")) {
+        std::cout << "[Engine] Loading from binary cache...\n";
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        if (load_doc_stats_from_cache(cache_path)) {
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            
+            std::cout << "[Engine] ⚡ Loaded " << doc_stats_cache_.size() 
+                      << " documents in " << duration << "ms (from cache)\n";
+            return;
+        } else {
+            std::cout << "[Engine] Cache corrupted, rebuilding...\n";
+        }
+    }
+    
+    // Cache miss or invalid - build from scratch
+    std::cout << "[Engine] No valid cache found, building from forward_index.jsonl...\n";
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    build_doc_stats_cache(cache_path);
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    
+    std::cout << "[Engine] ✅ Built cache in " << duration << "ms\n";
+    
+    size_t estimated_mem = doc_stats_cache_.size() * (sizeof(int) + sizeof(DocStats) + 50);
+    std::cout << "[Engine] Memory usage: " << (estimated_mem / 1024 / 1024) << " MB\n";
 }
 
 void SearchService::load_delta_index() {

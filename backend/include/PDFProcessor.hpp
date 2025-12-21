@@ -29,6 +29,12 @@ public:
 
     // Process a single uploaded PDF and add to indices
     bool process_and_index(const std::string& pdf_path, int& assigned_doc_id);
+    
+    // Check and merge delta barrel if needed
+    void check_and_merge_delta();
+    
+    // Clean up old temporary files
+    static void cleanup_temp_files();
 
 private:
     Lexicon& lexicon_;

@@ -10,6 +10,9 @@
 #include <fstream>
 
 int main() {
+    // Clean up old temp JSON files from previous runs
+    PDFProcessor::cleanup_temp_files();
+    
     SearchService engine;
     
     // Initialize components for PDF processing
