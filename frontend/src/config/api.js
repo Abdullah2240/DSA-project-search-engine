@@ -10,6 +10,7 @@ export const API_ENDPOINTS = {
   SEARCH: `${API_BASE_URL}/search`,
   AUTOCOMPLETE: `${API_BASE_URL}/autocomplete`,
   UPLOAD: `${API_BASE_URL}/upload`,
+  DOWNLOAD: (docId) => `${API_BASE_URL}/download/${docId}`,
 };
 
 // Helper function to build search URL
@@ -20,4 +21,9 @@ export const buildSearchUrl = (query) => {
 // Helper function to build autocomplete URL
 export const buildAutocompleteUrl = (prefix, limit = 8) => {
   return `${API_ENDPOINTS.AUTOCOMPLETE}?q=${encodeURIComponent(prefix)}&limit=${limit}`;
+};
+
+// Helper function to build download URL
+export const buildDownloadUrl = (docId) => {
+  return `${API_BASE_URL}/download/${docId}`;
 };

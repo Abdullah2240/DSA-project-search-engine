@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <algorithm>
+#include <set>
 #include "json.hpp"
 
 using json = nlohmann::json;
@@ -128,8 +129,14 @@ ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id)
     // Create temp output file for Python script
     std::string temp_json = temp_dir + "/temp_" + std::to_string(doc_id) + ".json";
     
-    // Call Python tokenizer (use py -3.14 for Python 3.14)
-    std::string python_cmd = "py -3.14 scripts/tokenize_single_pdf.py \"" 
+    // Call Python tokenizer (cross-platform: use python3 on Linux/Mac, py on Windows)
+    #ifdef _WIN32
+        std::string python_exe = "py -3.14";
+    #else
+        std::string python_exe = "python3";
+    #endif
+    
+    std::string python_cmd = python_exe + " scripts/tokenize_single_pdf.py \"" 
                            + pdf_path + "\" " 
                            + std::to_string(doc_id) + " \"" 
                            + temp_json + "\"";
@@ -208,18 +215,24 @@ void PDFProcessor::check_and_merge_delta() {
         json delta;
         f >> delta;
         
-        // Count total documents in delta barrel
-        int total_docs = 0;
+        // Count unique documents in delta barrel
+        std::set<int> unique_docs;
         for (auto& word_entry : delta.items()) {
             if (word_entry.value().is_array()) {
-                total_docs += word_entry.value().size();
+                for (auto& doc_entry : word_entry.value()) {
+                    if (doc_entry.contains("doc_id")) {
+                        unique_docs.insert(doc_entry["doc_id"].get<int>());
+                    }
+                }
             }
         }
         
-        // Merge if delta has 500+ document entries
-        if (total_docs >= 500) {
+        int total_docs = unique_docs.size();
+        
+        // Merge if delta has 50+ unique documents (much more reasonable threshold)
+        if (total_docs >= 50) {
             std::cout << "[PDFProcessor] ⚠️  Delta barrel has " << total_docs 
-                      << " entries. Merging to main barrels..." << std::endl;
+                      << " unique documents. Merging to main barrels..." << std::endl;
             
             inverted_builder_.merge_delta_to_main("data/processed/barrels");
             
@@ -273,9 +286,90 @@ bool PDFProcessor::process_and_index(const std::string& pdf_path, int& assigned_
     );
     std::cout << "[PDFProcessor] Metadata added" << std::endl;
     
-    // 8. Add URL mapping
+    // 8. Add URL mapping and save to disk
     url_mapper_.add_mapping(assigned_doc_id, "uploaded://" + fs::path(pdf_path).filename().string());
     std::cout << "[PDFProcessor] URL mapping added" << std::endl;
+    
+    // 8.1. Save URL mapping to disk
+    try {
+        json url_json;
+        
+        // Read existing URL mappings
+        std::ifstream url_in("data/processed/docid_to_url.json");
+        if (url_in.is_open()) {
+            try {
+                url_in >> url_json;
+            } catch (...) {
+                url_json = json::object();
+            }
+            url_in.close();
+        } else {
+            url_json = json::object();
+        }
+        
+        // Add new URL mapping
+        url_json[std::to_string(assigned_doc_id)] = "uploaded://" + fs::path(pdf_path).filename().string();
+        
+        // Write back to file
+        std::ofstream url_file("data/processed/docid_to_url.json");
+        if (url_file.is_open()) {
+            url_file << url_json.dump(2);
+            url_file.close();
+            std::cout << "[PDFProcessor] URL mapping saved to disk" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[PDFProcessor] Warning: Could not save URL mapping: " << e.what() << std::endl;
+    }
+    
+    // 8.5. Save metadata to disk
+    try {
+        json metadata_json;
+        
+        // Read existing metadata
+        std::ifstream meta_in("data/processed/document_metadata.json");
+        if (meta_in.is_open()) {
+            try {
+                meta_in >> metadata_json;
+            } catch (...) {
+                metadata_json = json::object();
+            }
+            meta_in.close();
+        } else {
+            metadata_json = json::object();
+        }
+        
+        // Add new document (use dictionary format to match existing structure)
+        json new_doc;
+        new_doc["title"] = processed.title;
+        new_doc["publication_year"] = 2024;
+        new_doc["publication_month"] = 1;
+        new_doc["cited_by_count"] = 0;
+        new_doc["url"] = "uploaded://" + fs::path(pdf_path).filename().string();
+        new_doc["keywords"] = json::array();
+        
+        metadata_json[std::to_string(assigned_doc_id)] = new_doc;
+        
+        // Write back to file
+        std::ofstream meta_file("data/processed/document_metadata.json");
+        if (meta_file.is_open()) {
+            meta_file << metadata_json.dump(2);
+            meta_file.close();
+            std::cout << "[PDFProcessor] Metadata saved to disk" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[PDFProcessor] Warning: Could not save metadata: " << e.what() << std::endl;
+    }
+    
+    // 8.6. Copy PDF with doc_id as filename for downloads
+    try {
+        std::string download_path = "data/temp_pdfs/" + std::to_string(assigned_doc_id) + ".pdf";
+        if (pdf_path != download_path) {
+            fs::copy_file(pdf_path, download_path, fs::copy_options::overwrite_existing);
+            std::cout << "[PDFProcessor] PDF saved for download as: " << download_path << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[PDFProcessor] Warning: Could not copy PDF for download: " << e.what() << std::endl;
+    }
     
     // 9. Append to test.jsonl for persistence
     std::ofstream outfile("data/processed/test.jsonl", std::ios::app);

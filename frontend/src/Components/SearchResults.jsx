@@ -1,10 +1,17 @@
 import './SearchResults.css'
+import { buildDownloadUrl } from '../config/api'
 
 function SearchResults({ results, query, currentPage, onPageChange, totalResults }) {
   const RESULTS_PER_PAGE = 10;
   const totalPages = Math.ceil(totalResults / RESULTS_PER_PAGE);
   const startIndex = (currentPage - 1) * RESULTS_PER_PAGE + 1;
   const endIndex = Math.min(currentPage * RESULTS_PER_PAGE, totalResults);
+
+  const isUploadedDoc = (url) => url && url.startsWith('uploaded://');
+  
+  const getDownloadUrl = (docId) => {
+    return buildDownloadUrl(docId);
+  };
 
   const paginationNumbers = [];
   const maxVisiblePages = 10;
@@ -40,14 +47,40 @@ function SearchResults({ results, query, currentPage, onPageChange, totalResults
         {results.map((result, idx) => (
           <div key={result.docId || idx} className="result-item">
             <div className="result-header">
-              <a 
-                href={result.url} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="result-title"
-              >
-                {result.title || `Document #${result.docId}`}
-              </a>
+              {isUploadedDoc(result.url) ? (
+                <span 
+                  className="result-title"
+                  style={{cursor: 'pointer'}}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    fetch(getDownloadUrl(result.docId))
+                      .then(res => res.blob())
+                      .then(blob => {
+                        const url = window.URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `${result.title || 'document_' + result.docId}.pdf`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        window.URL.revokeObjectURL(url);
+                      })
+                      .catch(err => console.error('Download failed:', err));
+                  }}
+                >
+                  {result.title || `Document #${result.docId}`}
+                </span>
+              ) : (
+                <a 
+                  href={result.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="result-title"
+                >
+                  {result.title || `Document #${result.docId}`}
+                </a>
+              )}
               <span className="result-rank">#{idx + 1}</span>
             </div>
 
@@ -105,14 +138,40 @@ function SearchResults({ results, query, currentPage, onPageChange, totalResults
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
               </svg>
-              <a 
-                href={result.url} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="url-link"
-              >
-                {result.url}
-              </a>
+              {isUploadedDoc(result.url) ? (
+                <span 
+                  className="url-link"
+                  style={{cursor: 'pointer'}}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    fetch(getDownloadUrl(result.docId))
+                      .then(res => res.blob())
+                      .then(blob => {
+                        const url = window.URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `${result.title || 'document_' + result.docId}.pdf`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        window.URL.revokeObjectURL(url);
+                      })
+                      .catch(err => console.error('Download failed:', err));
+                  }}
+                >
+                  📥 Download PDF (Uploaded Document)
+                </span>
+              ) : (
+                <a 
+                  href={result.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="url-link"
+                >
+                  {result.url}
+                </a>
+              )}
             </p>
           </div>
         ))}

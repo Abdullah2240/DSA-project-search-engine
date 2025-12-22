@@ -134,6 +134,39 @@ int main() {
         }
     });
 
+    // Define Route: /download/:doc_id - Download uploaded PDFs
+    svr.Get(R"(/download/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        try {
+            int doc_id = std::stoi(req.matches[1]);
+            std::string pdf_path = "data/temp_pdfs/" + std::to_string(doc_id) + ".pdf";
+            
+            // Check if file exists
+            std::ifstream file(pdf_path, std::ios::binary);
+            if (!file.is_open()) {
+                res.status = 404;
+                res.set_content("{\"error\": \"PDF not found\"}", "application/json");
+                return;
+            }
+            
+            // Read file content
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string content = buffer.str();
+            file.close();
+            
+            // Serve PDF
+            res.set_header("Content-Type", "application/pdf");
+            res.set_header("Content-Disposition", "attachment; filename=\"document_" + std::to_string(doc_id) + ".pdf\"");
+            res.set_content(content, "application/pdf");
+            
+            std::cout << "[Download] Served PDF for doc_id " << doc_id << std::endl;
+            
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content("{\"error\": \"Invalid doc_id\"}", "application/json");
+        }
+    });
+
     // Define Route: /upload - Handle PDF uploads (saves to temp_pdfs for later processing)
     svr.Post("/upload", [&engine, &pdf_processor](const httplib::Request& req, httplib::Response& res) {
         try {
@@ -222,6 +255,7 @@ int main() {
     std::cout << "  - GET  /search?q=<query>" << std::endl;
     std::cout << "  - GET  /autocomplete?q=<prefix>&limit=<num>" << std::endl;
     std::cout << "  - POST /upload (multipart/form-data)" << std::endl;
+    std::cout << "  - GET  /download/<doc_id>" << std::endl;
     std::cout << "======================================" << std::endl;
     std::cout << "Open: http://localhost:8080" << std::endl;
     std::cout << "======================================" << std::endl;

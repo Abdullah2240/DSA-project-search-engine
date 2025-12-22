@@ -562,4 +562,9 @@ void SearchService::reload_metadata() {
     std::cout << "[Engine] Reloading metadata..." << std::endl;
     document_metadata_.load("data/processed/document_metadata.json");
     std::cout << "[Engine] Metadata reloaded: " << document_metadata_.size() << " documents" << std::endl;
+    
+    // Also reload URL mapper
+    std::cout << "[Engine] Reloading URL mapper..." << std::endl;
+    doc_url_mapper.load("data/processed/docid_to_url.json");
+    std::cout << "[Engine] URL mapper reloaded" << std::endl;
 }
