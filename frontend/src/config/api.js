@@ -10,7 +10,9 @@ export const API_ENDPOINTS = {
   SEARCH: `${API_BASE_URL}/search`,
   AUTOCOMPLETE: `${API_BASE_URL}/autocomplete`,
   UPLOAD: `${API_BASE_URL}/upload`,
+  UPLOAD_PROGRESS: `${API_BASE_URL}/upload-progress`,
   DOWNLOAD: (docId) => `${API_BASE_URL}/download/${docId}`,
+  STATS: `${API_BASE_URL}/stats`,
 };
 
 // Helper function to build search URL

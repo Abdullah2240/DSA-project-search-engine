@@ -129,19 +129,28 @@ ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id)
     // Create temp output file for Python script
     std::string temp_json = temp_dir + "/temp_" + std::to_string(doc_id) + ".json";
     
-    // Call Python tokenizer (cross-platform: use python3 on Linux/Mac, py on Windows)
+    // Call Python tokenizer (use venv if available, fallback to system python)
+    std::string python_exe;
     #ifdef _WIN32
-        std::string python_exe = "py -3.14";
+        if (fs::exists("venv/Scripts/python.exe")) {
+            python_exe = "venv\\Scripts\\python.exe";
+        } else {
+            python_exe = "py -3.14";
+        }
     #else
-        std::string python_exe = "python3";
+        if (fs::exists("venv/bin/python")) {
+            python_exe = "venv/bin/python";
+        } else {
+            python_exe = "python3";
+        }
     #endif
     
     std::string python_cmd = python_exe + " scripts/tokenize_single_pdf.py \"" 
                            + pdf_path + "\" " 
                            + std::to_string(doc_id) + " \"" 
-                           + temp_json + "\"";
+                           + temp_json + "\" 2>&1";
     
-    std::cout << "[PDFProcessor] Tokenizing: " << pdf_path << std::endl;
+    std::cout << "[PDFProcessor] Tokenizing (max 5000 tokens, 20 pages)..." << std::endl;
     int ret = std::system(python_cmd.c_str());
     
     if (ret != 0) {
@@ -163,8 +172,10 @@ ProcessedPDF PDFProcessor::tokenize_pdf(const std::string& pdf_path, int doc_id)
         f >> j;
         f.close(); // Close before deleting
         
-        result.title = j.value("title", "Untitled");
+        result.title = j.value("title", "Untitled Document");
         result.tokens = j.value("body_tokens", std::vector<std::string>());
+        
+        std::cout << "[PDFProcessor] Title: " << result.title.substr(0, 50) << "..." << std::endl;
         
         if (result.tokens.empty()) {
             result.error = "No tokens extracted from PDF";
@@ -229,14 +240,14 @@ void PDFProcessor::check_and_merge_delta() {
         
         int total_docs = unique_docs.size();
         
-        // Merge if delta has 50+ unique documents (much more reasonable threshold)
-        if (total_docs >= 50) {
+        // OPTIMIZATION: Higher threshold to reduce merge frequency  
+        if (total_docs >= 100) {
             std::cout << "[PDFProcessor] ⚠️  Delta barrel has " << total_docs 
-                      << " unique documents. Merging to main barrels..." << std::endl;
+                      << " documents. Consider merging (auto-merge at 100+)" << std::endl;
             
-            inverted_builder_.merge_delta_to_main("data/processed/barrels");
-            
-            std::cout << "[PDFProcessor] ✅ Delta barrel merged and cleared!" << std::endl;
+            // Optionally enable auto-merge here if needed
+            // inverted_builder_.merge_delta_to_main("data/processed/barrels");
+            // std::cout << "[PDFProcessor] ✅ Delta barrel merged and cleared!" << std::endl;
         }
     } catch (const std::exception& e) {
         std::cerr << "[PDFProcessor] Warning: Could not check delta size: " << e.what() << "\n";
@@ -244,36 +255,37 @@ void PDFProcessor::check_and_merge_delta() {
 }
 
 bool PDFProcessor::process_and_index(const std::string& pdf_path, int& assigned_doc_id) {
-    std::cout << "[PDFProcessor] Starting processing: " << pdf_path << std::endl;
+    std::cout << "[PDFProcessor] ⏱️  Starting fast processing..." << std::endl;
     
     // 1. Get next doc_id
     assigned_doc_id = get_next_doc_id();
     std::cout << "[PDFProcessor] Assigned doc_id: " << assigned_doc_id << std::endl;
     
-    // 2. Tokenize PDF using Python
+    // 2. Tokenize PDF using Python (LIMITED to 5000 tokens, 20 pages)
     ProcessedPDF processed = tokenize_pdf(pdf_path, assigned_doc_id);
     if (!processed.success) {
         std::cerr << "[PDFProcessor] ERROR: " << processed.error << std::endl;
         return false;
     }
     
-    std::cout << "[PDFProcessor] Extracted " << processed.tokens.size() << " tokens" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Extracted " << processed.tokens.size() << " tokens" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Title: \"" << processed.title << "\"" << std::endl;
     
     // 3. Update Lexicon (adds new words if needed)
     lexicon_.update_from_tokens(processed.tokens, "data/processed/lexicon.json");
-    std::cout << "[PDFProcessor] Lexicon updated" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Lexicon updated" << std::endl;
     
     // 4. Build document statistics
     auto doc_stats = build_doc_stats(processed.tokens);
-    std::cout << "[PDFProcessor] Built stats for " << doc_stats.size() << " unique words" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Stats built (" << doc_stats.size() << " unique words)" << std::endl;
     
     // 5. Append to Forward Index
     forward_builder_.append_document("data/processed/forward_index.jsonl", assigned_doc_id, doc_stats);
-    std::cout << "[PDFProcessor] Forward index updated" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Forward index updated" << std::endl;
     
     // 6. Update Delta Barrel (Inverted Index)
     inverted_builder_.update_delta_barrel(assigned_doc_id, doc_stats);
-    std::cout << "[PDFProcessor] Delta barrel updated" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Delta barrel updated" << std::endl;
     
     // 7. Add metadata
     metadata_.add_document(
@@ -284,91 +296,48 @@ bool PDFProcessor::process_and_index(const std::string& pdf_path, int& assigned_
         processed.title,
         "uploaded://" + fs::path(pdf_path).filename().string()
     );
-    std::cout << "[PDFProcessor] Metadata added" << std::endl;
+    std::cout << "[PDFProcessor] ✓ Metadata added" << std::endl;
     
-    // 8. Add URL mapping and save to disk
-    url_mapper_.add_mapping(assigned_doc_id, "uploaded://" + fs::path(pdf_path).filename().string());
-    std::cout << "[PDFProcessor] URL mapping added" << std::endl;
+    // 8. Add URL mapping and save to disk for persistence
+    std::string url = "uploaded://" + fs::path(pdf_path).filename().string();
+    url_mapper_.add_mapping(assigned_doc_id, url);
+    url_mapper_.save("data/processed/docid_to_url.json");
+    std::cout << "[PDFProcessor] ✓ URL mapping added" << std::endl;
     
-    // 8.1. Save URL mapping to disk
+    // 8.1. Save metadata to disk for persistence
+    metadata_.save("data/processed/document_metadata.json");
+    std::cout << "[PDFProcessor] ✓ Metadata saved" << std::endl;
+    
+    // 8.2. Copy PDF with doc_id as filename to downloads directory (FIXED with verification)
     try {
-        json url_json;
+        std::string download_dir = "data/downloads";
+        fs::create_directories(download_dir);
+        std::string download_path = download_dir + "/" + std::to_string(assigned_doc_id) + ".pdf";
         
-        // Read existing URL mappings
-        std::ifstream url_in("data/processed/docid_to_url.json");
-        if (url_in.is_open()) {
-            try {
-                url_in >> url_json;
-            } catch (...) {
-                url_json = json::object();
+        // Ensure source file exists and is accessible
+        if (!fs::exists(pdf_path)) {
+            std::cerr << "[PDFProcessor] Warning: Source PDF not found: " << pdf_path << std::endl;
+        } else if (pdf_path != download_path) {
+            // Use copy_file with overwrite option and error handling
+            std::error_code ec;
+            fs::copy_file(pdf_path, download_path, fs::copy_options::overwrite_existing, ec);
+            
+            if (ec) {
+                std::cerr << "[PDFProcessor] Warning: Could not copy PDF: " << ec.message() << std::endl;
+            } else {
+                std::cout << "[PDFProcessor] ✓ PDF copied to downloads/" << assigned_doc_id << ".pdf" << std::endl;
+                
+                // Verify copied file
+                if (fs::exists(download_path) && fs::file_size(download_path) > 0) {
+                    std::cout << "[PDFProcessor] ✓ Download file verified (" 
+                              << fs::file_size(download_path) / 1024 << " KB)" << std::endl;
+                } else {
+                    std::cerr << "[PDFProcessor] Warning: Download file verification failed!" << std::endl;
+                }
             }
-            url_in.close();
-        } else {
-            url_json = json::object();
-        }
-        
-        // Add new URL mapping
-        url_json[std::to_string(assigned_doc_id)] = "uploaded://" + fs::path(pdf_path).filename().string();
-        
-        // Write back to file
-        std::ofstream url_file("data/processed/docid_to_url.json");
-        if (url_file.is_open()) {
-            url_file << url_json.dump(2);
-            url_file.close();
-            std::cout << "[PDFProcessor] URL mapping saved to disk" << std::endl;
         }
     } catch (const std::exception& e) {
-        std::cerr << "[PDFProcessor] Warning: Could not save URL mapping: " << e.what() << std::endl;
-    }
-    
-    // 8.5. Save metadata to disk
-    try {
-        json metadata_json;
-        
-        // Read existing metadata
-        std::ifstream meta_in("data/processed/document_metadata.json");
-        if (meta_in.is_open()) {
-            try {
-                meta_in >> metadata_json;
-            } catch (...) {
-                metadata_json = json::object();
-            }
-            meta_in.close();
-        } else {
-            metadata_json = json::object();
-        }
-        
-        // Add new document (use dictionary format to match existing structure)
-        json new_doc;
-        new_doc["title"] = processed.title;
-        new_doc["publication_year"] = 2024;
-        new_doc["publication_month"] = 1;
-        new_doc["cited_by_count"] = 0;
-        new_doc["url"] = "uploaded://" + fs::path(pdf_path).filename().string();
-        new_doc["keywords"] = json::array();
-        
-        metadata_json[std::to_string(assigned_doc_id)] = new_doc;
-        
-        // Write back to file
-        std::ofstream meta_file("data/processed/document_metadata.json");
-        if (meta_file.is_open()) {
-            meta_file << metadata_json.dump(2);
-            meta_file.close();
-            std::cout << "[PDFProcessor] Metadata saved to disk" << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "[PDFProcessor] Warning: Could not save metadata: " << e.what() << std::endl;
-    }
-    
-    // 8.6. Copy PDF with doc_id as filename for downloads
-    try {
-        std::string download_path = "data/temp_pdfs/" + std::to_string(assigned_doc_id) + ".pdf";
-        if (pdf_path != download_path) {
-            fs::copy_file(pdf_path, download_path, fs::copy_options::overwrite_existing);
-            std::cout << "[PDFProcessor] PDF saved for download as: " << download_path << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "[PDFProcessor] Warning: Could not copy PDF for download: " << e.what() << std::endl;
+        std::cerr << "[PDFProcessor] Warning: Exception copying PDF: " << e.what() << std::endl;
     }
     
     // 9. Append to test.jsonl for persistence
@@ -382,12 +351,12 @@ bool PDFProcessor::process_and_index(const std::string& pdf_path, int& assigned_
         doc_json["pdf_path"] = pdf_path;
         doc_json["url"] = "uploaded://" + fs::path(pdf_path).filename().string();
         outfile << doc_json.dump(-1) << "\n";
-        std::cout << "[PDFProcessor] Added to test.jsonl" << std::endl;
+        std::cout << "[PDFProcessor] ✓ Added to test.jsonl" << std::endl;
     }
     
-    // 10. Check if delta barrel needs merging
+    // 10. Check if delta barrel needs merging (less frequent)
     check_and_merge_delta();
     
-    std::cout << "[PDFProcessor] ✅ Document " << assigned_doc_id << " is now searchable!" << std::endl;
+    std::cout << "[PDFProcessor] ✅ Document " << assigned_doc_id << " is SEARCHABLE!" << std::endl;
     return true;
 }

@@ -38,15 +38,15 @@ DEFAULT_OUT_JSONL = os.path.join(PROCESSED_DIR, "test.jsonl")
 
 # PDF processing libraries
 try:
-    import PyPDF2
-    PDF_LIB = "PyPDF2"
+    import fitz  # PyMuPDF
+    PDF_LIB = "PyMuPDF"
 except ImportError:
     try:
         import pdfplumber
         PDF_LIB = "pdfplumber"
     except ImportError:
         print("ERROR: No PDF library found. Install one of:")
-        print("  pip install PyPDF2")
+        print("  pip install PyMuPDF")
         print("  pip install pdfplumber")
         sys.exit(1)
 
@@ -63,16 +63,18 @@ def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
     """Extract text from PDF file (first 100 pages)."""
     try:
         text = ""
-        if PDF_LIB == "PyPDF2":
-            with open(pdf_path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                if not reader.pages:
-                    return None
-                for page in reader.pages[:100]:
-                    try:
-                        text += page.extract_text() or ""
-                    except Exception:
-                        continue
+        if PDF_LIB == "PyMuPDF":
+            doc = fitz.open(pdf_path)
+            if doc.page_count == 0:
+                doc.close()
+                return None
+            for page_num in range(min(doc.page_count, 100)):
+                try:
+                    page = doc.load_page(page_num)
+                    text += page.get_text()
+                except Exception:
+                    continue
+            doc.close()
         else:
             import pdfplumber
             with pdfplumber.open(pdf_path) as pdf:

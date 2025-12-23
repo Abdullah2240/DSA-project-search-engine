@@ -553,9 +553,16 @@ std::string SearchService::autocomplete(const std::string& prefix, int limit) {
 
 void SearchService::reload_delta_index() {
     std::cout << "[Engine] Reloading delta index..." << std::endl;
+    
+    // CRITICAL: Clear both delta index AND barrel cache
+    std::cout << "[Engine] Clearing delta index (" << delta_index_.size() << " words)..." << std::endl;
     delta_index_.clear();
+    
+    std::cout << "[Engine] Clearing barrel cache (" << barrel_cache_.size() << " barrels)..." << std::endl;
+    barrel_cache_.clear();
+    
     load_delta_index();
-    std::cout << "[Engine] Delta index reloaded successfully" << std::endl;
+    std::cout << "[Engine] ✅ Delta index reloaded: " << delta_index_.size() << " words" << std::endl;
 }
 
 void SearchService::reload_metadata() {
@@ -567,4 +574,75 @@ void SearchService::reload_metadata() {
     std::cout << "[Engine] Reloading URL mapper..." << std::endl;
     doc_url_mapper.load("data/processed/docid_to_url.json");
     std::cout << "[Engine] URL mapper reloaded" << std::endl;
+    
+    // CRITICAL: Reload lexicon to pick up new words from uploaded docs
+    std::cout << "[Engine] Reloading lexicon..." << std::endl;
+    lexicon_trie_.load_from_json("data/processed/lexicon.json");
+    std::cout << "[Engine] Lexicon reloaded: " << lexicon_trie_.size() << " words" << std::endl;
+    
+    // CRITICAL: Incrementally update doc stats cache for NEW documents only
+    std::cout << "[Engine] Checking for new documents..." << std::endl;
+    
+    // Fast approach: Read ONLY the last 100 lines (recent uploads)
+    std::ifstream f("data/processed/forward_index.jsonl");
+    if (f.is_open()) {
+        // Get to end and count lines
+        f.seekg(0, std::ios::end);
+        std::streampos file_size = f.tellg();
+        
+        // Read last chunk (max 500KB for ~100 docs)
+        std::streamoff chunk_size = 500000;
+        std::streampos start_pos = (file_size > chunk_size) ? file_size - chunk_size : std::streampos(0);
+        f.seekg(start_pos);
+        
+        // Skip partial line if we didn't start at beginning
+        if (start_pos > std::streampos(0)) {
+            std::string dummy;
+            std::getline(f, dummy);
+        }
+        
+        std::string line;
+        line.reserve(4096);
+        int added = 0;
+        
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            
+            try {
+                json doc_line = json::parse(line);
+                if (!doc_line.contains("doc_id") || !doc_line.contains("data")) continue;
+                
+                int doc_id = std::stoi(doc_line["doc_id"].get<std::string>());
+                
+                // Only add if not in cache
+                if (doc_stats_cache_.find(doc_id) == doc_stats_cache_.end()) {
+                    json& data = doc_line["data"];
+                    DocStats stats;
+                    stats.doc_length = data.value("doc_length", 0);
+                    
+                    if (data.contains("words")) {
+                        for (auto& word_item : data["words"].items()) {
+                            int word_id = std::stoi(word_item.key());
+                            json& word_stats = word_item.value();
+                            
+                            if (word_stats.contains("title_frequency")) {
+                                int title_freq = word_stats["title_frequency"].get<int>();
+                                if (title_freq > 0) {
+                                    stats.title_frequencies[word_id] = title_freq;
+                                }
+                            }
+                        }
+                    }
+                    
+                    doc_stats_cache_[doc_id] = std::move(stats);
+                    added++;
+                }
+            } catch (const std::exception&) {
+                continue;
+            }
+        }
+        
+        std::cout << "[Engine] ⚡ Added " << added << " new documents (total: " 
+                  << doc_stats_cache_.size() << ")" << std::endl;
+    }
 }

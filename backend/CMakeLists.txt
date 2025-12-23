@@ -59,6 +59,8 @@ add_executable(search_engine
     src/forward_index.cpp
     src/inverted_index.cpp
     src/PDFProcessor.cpp
+    src/BatchIndexWriter.cpp
+    src/PDFProcessingPool.cpp
 )
 target_link_libraries(search_engine doc_url_mapper)
 

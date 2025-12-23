@@ -52,34 +52,9 @@ function App() {
     return stars;
   }
 
-  const handleFileUpload = async (files) => {
-    setIsLoading(true);
-    setError(null);
-    
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('files', file);
-    });
-
-    try {
-      const response = await fetch(API_ENDPOINTS.UPLOAD, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const result = await response.json();
-      alert(`Successfully uploaded ${result.uploadedCount || files.length} files.`);
-      
-    } catch (err) {
-      console.error('Upload error:', err);
-      setError('Failed to upload files. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
+  const handleUploadSuccess = (result) => {
+    // No alert needed - PDFUpload handles the UI
+    console.log('Upload successful:', result);
   };
 
   return (
@@ -164,7 +139,7 @@ function App() {
           </>
         ) : (
           <div className="upload-container">
-            <PDFUpload onUpload={handleFileUpload} />
+            <PDFUpload onSuccess={handleUploadSuccess} />
           </div>
         )}
       </div>

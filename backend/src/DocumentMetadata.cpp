@@ -97,6 +97,55 @@ void DocumentMetadata::add_document(int doc_id, int pub_year, int pub_month, int
     std::cout << "[Metadata] Added metadata for doc " << doc_id << std::endl;
 }
 
+bool DocumentMetadata::save(const std::string& metadata_path) const {
+    try {
+        json j = json::object();
+        
+        for (const auto& [doc_id, meta] : metadata_) {
+            json doc = json::object();
+            doc["publication_year"] = meta.publication_year;
+            doc["publication_month"] = meta.publication_month;
+            doc["cited_by_count"] = meta.cited_by_count;
+            doc["title"] = meta.title;
+            doc["url"] = meta.url;
+            doc["keywords"] = meta.keywords;
+            
+            j[std::to_string(doc_id)] = doc;
+        }
+        
+        // Write to temporary file first
+        std::string temp_path = metadata_path + ".tmp";
+        std::ofstream out(temp_path, std::ios::trunc);
+        if (!out.is_open()) {
+            std::cerr << "[Metadata] Error: Could not open file for writing: " << temp_path << std::endl;
+            return false;
+        }
+        
+        out << j.dump(2);
+        out.flush();
+        
+        if (!out.good()) {
+            std::cerr << "[Metadata] Error: Write failed for: " << temp_path << std::endl;
+            out.close();
+            return false;
+        }
+        
+        out.close();
+        
+        // Atomic rename
+        if (std::rename(temp_path.c_str(), metadata_path.c_str()) != 0) {
+            std::cerr << "[Metadata] Error: Could not rename temp file" << std::endl;
+            return false;
+        }
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[Metadata] Error saving metadata: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 
 
 

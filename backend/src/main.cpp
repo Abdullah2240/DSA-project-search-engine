@@ -1,6 +1,7 @@
 #include "httplib.h" 
 #include "SearchService.hpp"
-#include "PDFProcessor.hpp"
+#include "BatchIndexWriter.hpp"
+#include "PDFProcessingPool.hpp"
 #include "lexicon.hpp"
 #include "forward_index.hpp"
 #include "inverted_index.hpp"
@@ -8,11 +9,25 @@
 #include "doc_url_mapper.hpp"
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+#include <mutex>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+// Global progress tracker for upload status
+struct UploadProgress {
+    int total_files = 0;
+    int processed_files = 0;
+    int indexed_files = 0;
+    std::vector<std::string> current_status;
+    std::mutex mutex;
+};
+
+static UploadProgress g_upload_progress;
 
 int main() {
-    // Clean up old temp JSON files from previous runs
-    PDFProcessor::cleanup_temp_files();
-    
+    std::cout << "[Main] Initializing search engine...\n";
     SearchService engine;
     
     // Initialize components for PDF processing
@@ -30,7 +45,24 @@ int main() {
     DocURLMapper url_mapper;
     url_mapper.load("data/processed/docid_to_url.json");
     
-    PDFProcessor pdf_processor(lexicon, forward_builder, inverted_builder, metadata, url_mapper);
+    // Initialize batch writer (flushes every 10 docs or 30 seconds)
+    BatchIndexWriter batch_writer(
+        lexicon,
+        forward_builder,
+        inverted_builder,
+        metadata,
+        url_mapper,
+        10,  // batch_size
+        std::chrono::seconds(30)  // flush_interval
+    );
+    
+    // Initialize processing pool
+    size_t num_workers = std::thread::hardware_concurrency();
+    if (num_workers == 0) num_workers = 4;
+    
+    PDFProcessingPool processing_pool(num_workers, batch_writer, lexicon);
+    
+    std::cout << "[Main] Async processing pool ready with " << num_workers << " workers\n";
     
     httplib::Server svr;
 
@@ -138,17 +170,28 @@ int main() {
     svr.Get(R"(/download/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
         try {
             int doc_id = std::stoi(req.matches[1]);
-            std::string pdf_path = "data/temp_pdfs/" + std::to_string(doc_id) + ".pdf";
+            // Check both locations for PDF
+            std::vector<std::string> possible_paths = {
+                "data/downloads/" + std::to_string(doc_id) + ".pdf",
+                "data/temp_pdfs/" + std::to_string(doc_id) + ".pdf"
+            };
             
-            // Check if file exists
-            std::ifstream file(pdf_path, std::ios::binary);
-            if (!file.is_open()) {
+            std::string pdf_path;
+            for (const auto& path : possible_paths) {
+                if (fs::exists(path)) {
+                    pdf_path = path;
+                    break;
+                }
+            }
+            
+            if (pdf_path.empty()) {
                 res.status = 404;
                 res.set_content("{\"error\": \"PDF not found\"}", "application/json");
                 return;
             }
             
             // Read file content
+            std::ifstream file(pdf_path, std::ios::binary);
             std::stringstream buffer;
             buffer << file.rdbuf();
             std::string content = buffer.str();
@@ -167,95 +210,238 @@ int main() {
         }
     });
 
-    // Define Route: /upload - Handle PDF uploads (saves to temp_pdfs for later processing)
-    svr.Post("/upload", [&engine, &pdf_processor](const httplib::Request& req, httplib::Response& res) {
+    // NEW: Upload progress endpoint
+    svr.Get("/upload-progress", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+        
+        nlohmann::json progress;
+        progress["total"] = g_upload_progress.total_files;
+        progress["processed"] = g_upload_progress.processed_files;
+        progress["indexed"] = g_upload_progress.indexed_files;
+        progress["status"] = g_upload_progress.current_status;
+        
+        res.set_content(progress.dump(), "application/json");
+    });
+
+    // OPTIMIZED Route: /upload - Async PDF uploads with concurrent processing
+    svr.Post("/upload", [&processing_pool, &batch_writer, &metadata, &engine](
+        const httplib::Request& req, httplib::Response& res) {
+        
         try {
-            if (req.has_header("Content-Type")) {
-                std::string content_type = req.get_header_value("Content-Type");
-                
-                if (content_type.find("multipart/form-data") != std::string::npos) {
-                    int uploaded_count = 0;
-                    int failed_count = 0;
-                    std::vector<int> new_doc_ids;
-                    
-                    // Process uploaded files from multipart form
-                    if (req.form.has_file("files")) {
-                        auto files = req.form.get_files("files");
-                        
-                        for (const auto& file : files) {
-                            std::string filename = file.filename;
-                            std::string content = file.content;
-                            
-                            // Save to temp directory
-                            std::string temp_path = "data/temp_pdfs/" + filename;
-                            std::ofstream out(temp_path, std::ios::binary);
-                            if (out.is_open()) {
-                                out.write(content.data(), content.size());
-                                out.close();
-                                std::cout << "[Upload] Saved: " << filename << std::endl;
-                                
-                                // Process and index immediately
-                                int doc_id = -1;
-                                if (pdf_processor.process_and_index(temp_path, doc_id)) {
-                                    uploaded_count++;
-                                    new_doc_ids.push_back(doc_id);
-                                    std::cout << "[Upload] ✅ Indexed doc_id " << doc_id << std::endl;
-                                } else {
-                                    failed_count++;
-                                    std::cerr << "[Upload] ❌ Failed to index: " << filename << std::endl;
-                                }
-                            } else {
-                                failed_count++;
-                                std::cerr << "[Upload] Failed to save: " << filename << std::endl;
-                            }
+            // Reset progress tracker
+            {
+                std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+                g_upload_progress.total_files = 0;
+                g_upload_progress.processed_files = 0;
+                g_upload_progress.indexed_files = 0;
+                g_upload_progress.current_status.clear();
+            }
+            
+            if (!req.has_header("Content-Type") || 
+                req.get_header_value("Content-Type").find("multipart/form-data") == std::string::npos) {
+                res.status = 400;
+                res.set_content("{\"error\": \"Expected multipart/form-data\"}", "application/json");
+                return;
+            }
+            
+            auto upload_start = std::chrono::steady_clock::now();
+            
+            int uploaded_count = 0;
+            int failed_count = 0;
+            std::vector<std::future<int>> futures;
+            std::vector<int> new_doc_ids;
+            
+            // Get the ACTUAL highest doc_id from metadata file (not the cached count)
+            int next_doc_id = 0;
+            {
+                std::ifstream meta_file("data/processed/document_metadata.json");
+                if (meta_file.is_open()) {
+                    json meta_json;
+                    meta_file >> meta_json;
+                    for (auto& [key, value] : meta_json.items()) {
+                        int doc_id = std::stoi(key);
+                        if (doc_id >= next_doc_id) {
+                            next_doc_id = doc_id + 1;
                         }
                     }
-                    
-                    // Reload indices in SearchService
-                    if (uploaded_count > 0) {
-                        std::cout << "[Upload] Reloading search engine indices..." << std::endl;
-                        engine.reload_delta_index();
-                        engine.reload_metadata();
-                    }
-                    
-                    std::string response = "{\"success\": true, \"uploadedCount\": " + 
-                                          std::to_string(uploaded_count) + 
-                                          ", \"failedCount\": " + std::to_string(failed_count) + 
-                                          ", \"newDocIds\": [";
-                    for (size_t i = 0; i < new_doc_ids.size(); ++i) {
-                        response += std::to_string(new_doc_ids[i]);
-                        if (i < new_doc_ids.size() - 1) response += ", ";
-                    }
-                    response += "], \"message\": \"";
-                    if (uploaded_count > 0) {
-                        response += "PDFs uploaded and indexed successfully! They are now searchable.\"}";
-                    } else {
-                        response += "Upload completed but no PDFs were processed.\"}";
-                    }
-                    res.set_content(response, "application/json");
-                } else {
-                    res.status = 400;
-                    res.set_content("{\"error\": \"Invalid content type. Expected multipart/form-data\"}", "application/json");
                 }
-            } else {
-                res.status = 400;
-                res.set_content("{\"error\": \"No files provided or invalid request\"}", "application/json");
             }
+            
+            if (req.form.has_file("files")) {
+                auto files = req.form.get_files("files");
+                
+                // Set total count
+                {
+                    std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+                    g_upload_progress.total_files = files.size();
+                    g_upload_progress.current_status.push_back("Uploading files...");
+                }
+                
+                for (const auto& file : files) {
+                    std::string filename = file.filename;
+                    
+                    if (filename.size() < 4 || filename.substr(filename.size() - 4) != ".pdf") {
+                        failed_count++;
+                        continue;
+                    }
+                    
+                    std::string temp_path = "data/temp_pdfs/" + filename;
+                    fs::create_directories("data/temp_pdfs");
+                    
+                    std::ofstream out(temp_path, std::ios::binary);
+                    if (!out.is_open()) {
+                        failed_count++;
+                        continue;
+                    }
+                    
+                    out.write(file.content.data(), file.content.size());
+                    out.close();
+                    
+                    std::cout << "[Upload] Saved: " << filename << " (doc_id will be " 
+                              << next_doc_id << ")\n";
+                    
+                    auto future = processing_pool.submit_pdf(temp_path, next_doc_id);
+                    futures.push_back(std::move(future));
+                    new_doc_ids.push_back(next_doc_id);
+                    
+                    next_doc_id++;
+                    uploaded_count++;
+                }
+            }
+            
+            // Update progress: Processing
+            {
+                std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+                g_upload_progress.current_status.clear();
+                g_upload_progress.current_status.push_back("Processing PDFs (tokenizing, max 5000 tokens)...");
+            }
+            
+            // Wait for all PDFs to be processed (tokenized and queued)
+            std::cout << "[Upload] Waiting for " << futures.size() << " documents to be processed...\n";
+            for (size_t i = 0; i < futures.size(); ++i) {
+                try { 
+                    futures[i].wait();
+                    
+                    // Update progress
+                    {
+                        std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+                        g_upload_progress.processed_files++;
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "[Upload] Processing error: " << e.what() << "\n";
+                    failed_count++;
+                    uploaded_count--;
+                }
+            }
+            
+            // Update progress: Indexing
+            {
+                std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+                g_upload_progress.current_status.clear();
+                g_upload_progress.current_status.push_back("Building search indices...");
+            }
+            
+            // Force immediate batch flush to write indices
+            if (uploaded_count > 0) {
+                std::cout << "[Upload] Flushing batch to index...\n";
+                batch_writer.flush_now();
+                std::cout << "[Upload] ✅ Batch flush completed!\n";
+                
+                // Small delay to ensure all file writes are synced to disk
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                
+                std::cout << "[Upload] Reloading search engine indices...\n";
+                engine.reload_delta_index();
+                engine.reload_metadata();
+                
+                // Update progress: Done
+                {
+                    std::lock_guard<std::mutex> lock(g_upload_progress.mutex);
+                    g_upload_progress.indexed_files = uploaded_count;
+                    g_upload_progress.current_status.clear();
+                    g_upload_progress.current_status.push_back("✅ All documents are now searchable!");
+                }
+                
+                std::cout << "[Upload] ✅ Documents indexed and searchable!\n";
+            }
+            
+            auto upload_end = std::chrono::steady_clock::now();
+            auto total_time = std::chrono::duration_cast<std::chrono::milliseconds>(upload_end - upload_start).count();
+            
+            std::string response = "{\"success\": true"
+                                  ", \"uploadedCount\": " + std::to_string(uploaded_count) +
+                                  ", \"failedCount\": " + std::to_string(failed_count) +
+                                  ", \"processingTimeMs\": " + std::to_string(total_time) +
+                                  ", \"newDocIds\": [";
+            
+            for (size_t i = 0; i < std::min(new_doc_ids.size(), static_cast<size_t>(uploaded_count)); ++i) {
+                response += std::to_string(new_doc_ids[i]);
+                if (i < std::min(new_doc_ids.size(), static_cast<size_t>(uploaded_count)) - 1) {
+                    response += ", ";
+                }
+            }
+            response += "], \"message\": \"";
+            
+            if (uploaded_count > 0) {
+                response += std::to_string(uploaded_count) + 
+                           " PDF(s) indexed in " + 
+                           std::to_string(total_time) + "ms (avg " +
+                           std::to_string(total_time / uploaded_count) + "ms each)";
+            } else {
+                response += "No files uploaded successfully.";
+            }
+            
+            response += "\", \"status\": \"indexed\"}";
+            
+            res.set_content(response, "application/json");
+            std::cout << "[Upload] ✅ Upload complete in " << total_time << "ms\n";
+            
         } catch (const std::exception& e) {
+            std::cerr << "[Upload] Error: " << e.what() << "\n";
             res.status = 500;
-            res.set_content("{\"error\": \"Upload failed: " + std::string(e.what()) + "\"}", "application/json");
+            res.set_content("{\"error\": \"Upload failed\"}", "application/json");
         }
     });
 
+    // Stats endpoint for monitoring
+    svr.Get("/stats", [&processing_pool, &batch_writer](
+        const httplib::Request&, httplib::Response& res) {
+        
+        auto pool_stats = processing_pool.get_stats();
+        auto batch_stats = batch_writer.get_stats();
+        
+        nlohmann::json stats_json;
+        stats_json["processing_pool"] = {
+            {"active_workers", pool_stats.active_workers},
+            {"queue_size", pool_stats.queue_size},
+            {"completed_tasks", pool_stats.completed_tasks},
+            {"failed_tasks", pool_stats.failed_tasks}
+        };
+        stats_json["batch_writer"] = {
+            {"documents_queued", batch_stats.documents_queued},
+            {"documents_indexed", batch_stats.documents_indexed},
+            {"batches_flushed", batch_stats.batches_flushed},
+            {"avg_batch_time_ms", batch_stats.avg_batch_time_ms},
+            {"current_queue_size", batch_stats.current_queue_size}
+        };
+        
+        res.set_content(stats_json.dump(2), "application/json");
+    });
+
     std::cout << "======================================" << std::endl;
-    std::cout << "Server starting on port 8080..." << std::endl;
+    std::cout << "   DSA Search Engine - OPTIMIZED" << std::endl;
     std::cout << "======================================" << std::endl;
-    std::cout << "Available endpoints:" << std::endl;
-    std::cout << "  - GET  /              (Frontend App)" << std::endl;
+    std::cout << "API Endpoints:" << std::endl;
     std::cout << "  - GET  /search?q=<query>" << std::endl;
     std::cout << "  - GET  /autocomplete?q=<prefix>&limit=<num>" << std::endl;
     std::cout << "  - POST /upload (multipart/form-data)" << std::endl;
     std::cout << "  - GET  /download/<doc_id>" << std::endl;
+    std::cout << "  - GET  /upload-progress" << std::endl;
+    std::cout << "  - GET  /stats" << std::endl;
+    std::cout << "======================================" << std::endl;
+    std::cout << "Upload Speed: Max 5000 tokens, 20 pages" << std::endl;
+    std::cout << "Target Time: <35 seconds per PDF" << std::endl;
+    std::cout << "Concurrent Processing: " << num_workers << " workers" << std::endl;
     std::cout << "======================================" << std::endl;
     std::cout << "Open: http://localhost:8080" << std::endl;
     std::cout << "======================================" << std::endl;

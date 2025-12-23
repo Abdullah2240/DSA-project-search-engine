@@ -13,6 +13,9 @@ public:
     
     // Add new mapping (for dynamic uploads)
     void add_mapping(int doc_id, const std::string& url);
+    
+    // Save mappings to JSON file
+    bool save(const std::string& filename) const;
 
 private:
     std::unordered_map<int, std::string> urls;
