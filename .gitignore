@@ -186,4 +186,5 @@ htmlcov/
 *.tar.gz
 *.zip
 *.7z
-*.rar
+*.rarbackend/data/processed/*.gz
+backend/data/processed/test.jsonl
